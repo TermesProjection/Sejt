@@ -2,7 +2,7 @@
 <html lang="hu">
 <head>
     <meta charset="UTF-8">
-    <title>Többjátékos Agar.io Klón - Javított</title>
+    <title>Többjátékos Agar.io Klón — Saját játékosra fix kamera (5000×5000)</title>
     <style>
         canvas { border: 2px solid white; background: #1a1a1a; display: block; margin: 0 auto; }
         body { background: #333; text-align: center; color: white; font-family: Arial, sans-serif; }
@@ -11,13 +11,13 @@
     </style>
 </head>
 <body>
-    <h3>J1: W,A,S,D | J2: Nyilak | Gyűjtsd az ételeket, kerüld az ütközést!</h3>
+    <h3>J1: W,A,S,D | J2: Nyilak | Világ: 50000×50000 — a kamera a saját játékoson van</h3>
     <div id="hud">
         <div>J1: <span id="score1">0</span></div>
         <div><button id="pauseBtn">Szünet</button> <button id="resetBtn">Reset</button></div>
         <div>J2: <span id="score2">0</span></div>
     </div>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <canvas id="gameCanvas" width="1200" height="800"></canvas>
 
     <script>
     const canvas = document.getElementById('gameCanvas');
@@ -27,52 +27,71 @@
     const pauseBtn = document.getElementById('pauseBtn');
     const resetBtn = document.getElementById('resetBtn');
 
-    // állapot inicializálás
+    // --- VILÁG MÉRETE
+    const worldWidth = 50000;
+    const worldHeight = 50000;
+
+    function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
     function makePlayer(x,y){ return { x, y, radius:20, baseSpeed:5, boost:1, boostUntil:0, flashUntil:0 }; }
-    let player1 = makePlayer(200,300);
-    let player2 = makePlayer(600,300);
+
+    // player1 = LOCAL PLAYER (a kamera erre lesz rögzítve)
+    let player1 = makePlayer(worldWidth * 0.25, worldHeight * 0.5);
+    let player2 = makePlayer(worldWidth * 0.75, worldHeight * 0.5);
     let score1 = 0, score2 = 0;
 
-    // ételek
+    // ételek világ-koordinátában
     const foods = [];
-    const foodCount = 20;
+    const foodCount = 12000;
     for(let i=0;i<foodCount;i++) foods.push(randomFood());
 
-    function randomFood(){ return { x: Math.random()*canvas.width, y: Math.random()*canvas.height, radius:5, type:'food' }; }
+    function randomFood(){
+        const r = 5;
+        return { x: r + Math.random()*(worldWidth - 2*r), y: r + Math.random()*(worldHeight - 2*r), radius: r, type:'food' };
+    }
 
-    // power-up spawn időzítés (ms alapú)
+    // power-up spawn időzítés (világ-koordináták)
     let speedBoost = null;
     let spawnTimer = 0;
-    const spawnInterval = 4000; // ms - megpróbál spawnolni minden 4s
+    const spawnInterval = 4000; // ms
 
     // játékidő ms-ben
-    let gameTimeMs = 60_000; // 60s
+    let gameTimeMs = 600_000; // 600s
     let startTime = performance.now();
 
-    // input
+    // input (normalizált)
     const keys = {};
-    document.addEventListener('keydown', e => keys[e.key] = true);
-    document.addEventListener('keyup', e => keys[e.key] = false);
+    document.addEventListener('keydown', e => {
+        const k = (e.key || '').toLowerCase();
+        if(e.key.startsWith('Arrow')) keys[e.key] = true;
+        else keys[k] = true;
+    });
+    document.addEventListener('keyup', e => {
+        const k = (e.key || '').toLowerCase();
+        if(e.key.startsWith('Arrow')) keys[e.key] = false;
+        else keys[k] = false;
+    });
 
-    // pause
+    // pause/reset
     let paused = false;
     pauseBtn.addEventListener('click', () => {
         paused = !paused;
         pauseBtn.textContent = paused ? 'Folytat' : 'Szünet';
-        if(!paused) lastTime = performance.now(); // reset timestamp
+        if(!paused) lastTime = performance.now();
     });
-
-    // reset gomb
     resetBtn.addEventListener('click', resetGame);
 
     function resetGame(){
-        player1 = makePlayer(200,300);
-        player2 = makePlayer(600,300);
+        player1 = makePlayer(worldWidth * 0.25, worldHeight * 0.5);
+        player2 = makePlayer(worldWidth * 0.75, worldHeight * 0.5);
         score1 = 0; score2 = 0;
-        foods.forEach(f => { f.x = Math.random()*canvas.width; f.y = Math.random()*canvas.height; });
+        for(let i=0;i<foods.length;i++){
+            const f = randomFood();
+            foods[i].x = f.x; foods[i].y = f.y; foods[i].radius = f.radius;
+        }
         speedBoost = null;
-        startTime = performance.now();
         spawnTimer = 0;
+        startTime = performance.now();
+        gameOver = false;
         updateHUD();
     }
 
@@ -81,59 +100,59 @@
         score2El.textContent = score2;
     }
 
-    // segédfüggvény: szabályozzuk a radius növekedést és a sebességet
     function effectiveSpeed(player){
-        // nagyobb gömb lassabb legyen (egyszerű korrekció)
         const sizeFactor = Math.max(1, player.radius / 20);
         return (player.baseSpeed / Math.sqrt(sizeFactor)) * player.boost;
     }
 
-    // mozgás, gyűjtés, ütközés időalapú
     function movePlayers(dt){
-        // dt millisekundumban
-        const moveAmount1 = effectiveSpeed(player1) * (dt/16.6667); // referenciának ~60fps frametime
+        const moveAmount1 = effectiveSpeed(player1) * (dt/16.6667);
         const moveAmount2 = effectiveSpeed(player2) * (dt/16.6667);
 
-        if(keys.w && player1.y - player1.radius > 0) player1.y -= moveAmount1;
-        if(keys.s && player1.y + player1.radius < canvas.height) player1.y += moveAmount1;
-        if(keys.a && player1.x - player1.radius > 0) player1.x -= moveAmount1;
-        if(keys.d && player1.x + player1.radius < canvas.width) player1.x += moveAmount1;
+        if(keys['w'] && player1.y - player1.radius > 0) player1.y -= moveAmount1;
+        if(keys['s'] && player1.y + player1.radius < worldHeight) player1.y += moveAmount1;
+        if(keys['a'] && player1.x - player1.radius > 0) player1.x -= moveAmount1;
+        if(keys['d'] && player1.x + player1.radius < worldWidth) player1.x += moveAmount1;
 
-        if(keys.ArrowUp && player2.y - player2.radius > 0) player2.y -= moveAmount2;
-        if(keys.ArrowDown && player2.y + player2.radius < canvas.height) player2.y += moveAmount2;
-        if(keys.ArrowLeft && player2.x - player2.radius > 0) player2.x -= moveAmount2;
-        if(keys.ArrowRight && player2.x + player2.radius < canvas.width) player2.x += moveAmount2;
+        if(keys['ArrowUp'] && player2.y - player2.radius > 0) player2.y -= moveAmount2;
+        if(keys['ArrowDown'] && player2.y + player2.radius < worldHeight) player2.y += moveAmount2;
+        if(keys['ArrowLeft'] && player2.x - player2.radius > 0) player2.x -= moveAmount2;
+        if(keys['ArrowRight'] && player2.x + player2.radius < worldWidth) player2.x += moveAmount2;
 
-        // boost idő ms alapon
+        // clamp world bounds (biztonság)
+        player1.x = clamp(player1.x, player1.radius, worldWidth - player1.radius);
+        player1.y = clamp(player1.y, player1.radius, worldHeight - player1.radius);
+        player2.x = clamp(player2.x, player2.radius, worldWidth - player2.radius);
+        player2.y = clamp(player2.y, player2.radius, worldHeight - player2.radius);
+
         const now = performance.now();
         if(player1.boostUntil > now){ player1.boost = 1.5; } else { player1.boost = 1; player1.boostUntil = 0; }
         if(player2.boostUntil > now){ player2.boost = 1.5; } else { player2.boost = 1; player2.boostUntil = 0; }
 
-        // flash timeout
-        if(player1.flashUntil <= now) player1.flashUntil = Math.max(0, player1.flashUntil);
-        if(player2.flashUntil <= now) player2.flashUntil = Math.max(0, player2.flashUntil);
+        if(player1.flashUntil <= now) player1.flashUntil = 0;
+        if(player2.flashUntil <= now) player2.flashUntil = 0;
     }
 
     function spawnSpeedBoost(dt){
         spawnTimer += dt;
         if(!speedBoost && spawnTimer >= spawnInterval){
-            // 40% esély, ha nem jön akkor újra várunk
             if(Math.random() < 0.4){
-                speedBoost = { x: Math.random()*canvas.width, y: Math.random()*canvas.height, radius:8, type:'speed' };
+                const r = 8;
+                speedBoost = { x: r + Math.random()*(worldWidth - 2*r), y: r + Math.random()*(worldHeight - 2*r), radius: r, type:'speed' };
             }
             spawnTimer = 0;
         }
     }
 
     function checkCollisions(){
-        // ételek gyűjtése
         for(let i=0;i<foods.length;i++){
             const f = foods[i];
             const d1 = Math.hypot(player1.x - f.x, player1.y - f.y);
             if(d1 < player1.radius + f.radius){
                 score1++;
-                player1.radius = Math.min(120, player1.radius + 1); // cap a túl nagy növekedés elkerülésére
+                player1.radius = Math.min(120, player1.radius + 1);
                 foods[i] = randomFood();
+                continue;
             }
             const d2 = Math.hypot(player2.x - f.x, player2.y - f.y);
             if(d2 < player2.radius + f.radius){
@@ -143,12 +162,11 @@
             }
         }
 
-        // power-up gyűjtés - előbb ellenőrizzük, hogy létezik
         if(speedBoost){
             const now = performance.now();
             const d1 = Math.hypot(player1.x - speedBoost.x, player1.y - speedBoost.y);
             if(d1 < player1.radius + speedBoost.radius){
-                player1.boostUntil = now + 5000; // 5000 ms = 5s
+                player1.boostUntil = now + 5000;
                 speedBoost = null;
             } else {
                 const d2 = Math.hypot(player2.x - speedBoost.x, player2.y - speedBoost.y);
@@ -159,111 +177,144 @@
             }
         }
 
-        // játékosok ütközése
-        const distPlayers = Math.hypot(player1.x - player2.x, player1.y - player2.y);
-        if(distPlayers < player1.radius + player2.radius){
-            // nagyobb "megeszi" a kisebbet csak ha jelentős a különbség
+        const dx = player2.x - player1.x;
+        const dy = player2.y - player1.y;
+        const distPlayers = Math.hypot(dx, dy);
+
+        if(distPlayers > 0 && distPlayers < player1.radius + player2.radius){
             if(player1.radius > player2.radius + 5){
                 player1.radius = Math.min(120, player1.radius + Math.floor(player2.radius/2));
                 score1 += 5;
-                player1.flashUntil = performance.now() + 500; // 0.5s flash
-                // reset kisebb játékos
-                player2 = makePlayer(600,300);
+                player1.flashUntil = performance.now() + 500;
+                player2 = makePlayer(worldWidth * 0.75, worldHeight * 0.5);
                 score2 = Math.max(0, score2 - 5);
             } else if(player2.radius > player1.radius + 5){
                 player2.radius = Math.min(120, player2.radius + Math.floor(player1.radius/2));
                 score2 += 5;
                 player2.flashUntil = performance.now() + 500;
-                player1 = makePlayer(200,300);
+                player1 = makePlayer(worldWidth * 0.25, worldHeight * 0.5);
                 score1 = Math.max(0, score1 - 5);
             } else {
-                // ha közel azonosak, pattanjanak szét egy kicsit
                 const overlap = (player1.radius + player2.radius) - distPlayers;
-                const nx = (player2.x - player1.x) / distPlayers;
-                const ny = (player2.y - player1.y) / distPlayers;
+                const nx = dx / distPlayers;
+                const ny = dy / distPlayers;
                 player1.x -= nx * overlap * 0.5;
                 player1.y -= ny * overlap * 0.5;
                 player2.x += nx * overlap * 0.5;
                 player2.y += ny * overlap * 0.5;
             }
+        } else if(distPlayers === 0){
+            player1.x = clamp(player1.x - 1, player1.radius, worldWidth - player1.radius);
+            player2.x = clamp(player2.x + 1, player2.radius, worldWidth - player2.radius);
         }
     }
 
+    // Kamera — MOST: mindig a PLAYER1 köré helyezzük (fix középpont)
+    let camX = 0, camY = 0;
+    function updateCamera(dt){
+        // player1-et középre tesszük:
+        const tx = player1.x - canvas.width / 2;
+        const ty = player1.y - canvas.height / 2;
+
+        // clamp, hogy ne lássunk a világon kívülre (ha azt akarod, hogy mindig középen legyen, akár törölheted a clamp-et)
+        const maxCamX = Math.max(0, worldWidth - canvas.width);
+        const maxCamY = Math.max(0, worldHeight - canvas.height);
+        // Ha szigorúan középre akarod a játékost még a széleken is -> töröld a két clamp sort alul.
+        camX = clamp(tx, 0, maxCamX);
+        camY = clamp(ty, 0, maxCamY);
+    }
+
     function draw(remainingMs){
-        // háttér és rács
-        ctx.fillStyle = '#1a1a1a';
+        ctx.fillStyle = '#111';
         ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-        for(let x=0;x<canvas.width;x+=50){
-            ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        const grid = 50;
+        const startX = Math.floor(camX / grid) * grid;
+        const endX = camX + canvas.width;
+        for(let x = startX; x <= endX; x += grid){
+            const sx = Math.round(x - camX);
+            ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,canvas.height); ctx.stroke();
         }
-        for(let y=0;y<canvas.height;y+=50){
-            ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke();
+        const startY = Math.floor(camY / grid) * grid;
+        const endY = camY + canvas.height;
+        for(let y = startY; y <= endY; y += grid){
+            const sy = Math.round(y - camY);
+            ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(canvas.width,sy); ctx.stroke();
         }
 
         // ételek
         ctx.fillStyle = 'yellow';
-        foods.forEach(f => { ctx.beginPath(); ctx.arc(f.x,f.y,f.radius,0,Math.PI*2); ctx.fill(); });
+        for(const f of foods){
+            const sx = f.x - camX;
+            const sy = f.y - camY;
+            if(sx + f.radius < 0 || sx - f.radius > canvas.width || sy + f.radius < 0 || sy - f.radius > canvas.height) continue;
+            ctx.beginPath(); ctx.arc(sx, sy, f.radius, 0, Math.PI*2); ctx.fill();
+        }
 
         // speed boost
         if(speedBoost){
-            ctx.fillStyle = 'green';
-            ctx.beginPath(); ctx.arc(speedBoost.x,speedBoost.y,speedBoost.radius,0,Math.PI*2); ctx.fill();
-            // kis ikont rajzolhatunk
-            ctx.fillStyle = 'white';
-            ctx.font = '10px Arial';
-            ctx.fillText('↗', speedBoost.x-4, speedBoost.y+3);
+            const sx = speedBoost.x - camX;
+            const sy = speedBoost.y - camY;
+            if(!(sx + speedBoost.radius < 0 || sx - speedBoost.radius > canvas.width || sy + speedBoost.radius < 0 || sy - speedBoost.radius > canvas.height)){
+                ctx.fillStyle = 'green';
+                ctx.beginPath(); ctx.arc(sx, sy, speedBoost.radius, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = 'white'; ctx.font = '10px Arial';
+                ctx.fillText('↗', Math.round(sx)-4, Math.round(sy)+3);
+            }
         }
 
-        // játékosok
+        // játékosok (kamera transzformálva)
         const now = performance.now();
+        const p1sx = player1.x - camX;
+        const p1sy = player1.y - camY;
         ctx.fillStyle = (player1.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'blue') : 'blue');
-        ctx.beginPath(); ctx.arc(player1.x, player1.y, player1.radius, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(p1sx, p1sy, player1.radius, 0, Math.PI*2); ctx.fill();
 
+        const p2sx = player2.x - camX;
+        const p2sy = player2.y - camY;
         ctx.fillStyle = (player2.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'red') : 'red');
-        ctx.beginPath(); ctx.arc(player2.x, player2.y, player2.radius, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(p2sx, p2sy, player2.radius, 0, Math.PI*2); ctx.fill();
 
-        // HUD szöveg
+        // HUD
         ctx.fillStyle = 'white';
         ctx.font = '18px Arial';
         ctx.fillText(`J1: ${score1}`, 10, 22);
         ctx.fillText(`J2: ${score2}`, canvas.width - 80, 22);
 
-        // idő
         const remainingSec = Math.max(0, (remainingMs / 1000)).toFixed(1);
         ctx.fillText(`Idő: ${remainingSec}s`, canvas.width/2 - 40, 22);
     }
 
-    // fő loop - deltaTime-al
+    // fő loop
     let lastTime = performance.now();
+    let gameOver = false;
     function loop(now){
         if(paused){ lastTime = now; requestAnimationFrame(loop); return; }
-        const dt = now - lastTime; // ms
+        const dt = now - lastTime;
         lastTime = now;
 
-        // előrehaladás
+        if(gameOver){ requestAnimationFrame(loop); return; }
+
         const elapsed = now - startTime;
         const remainingMs = Math.max(0, gameTimeMs - elapsed);
 
-        // lépések
         movePlayers(dt);
         spawnSpeedBoost(dt);
         checkCollisions();
+        updateCamera(dt); // most a player1-re fókuszál
         draw(remainingMs);
-
         updateHUD();
 
-        if(remainingMs <= 0){
-            // vége egyszer
+        if(remainingMs <= 0 && !gameOver){
+            gameOver = true;
             const winner = score1 > score2 ? 'Játékos 1' : score2 > score1 ? 'Játékos 2' : 'Döntetlen';
-            setTimeout(()=> alert(`Játék vége! ${winner} nyert! J1: ${score1}, J2: ${score2}`), 10);
-            resetGame();
-            // újraindítjuk időbélyegzőt
-            startTime = performance.now();
-            lastTime = performance.now();
+            setTimeout(()=>{
+                alert(`Játék vége! ${winner} nyert! J1: ${score1}, J2: ${score2}`);
+            }, 10);
+        } else {
+            requestAnimationFrame(loop);
         }
-
-        requestAnimationFrame(loop);
     }
 
     // indítás
