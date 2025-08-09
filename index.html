@@ -2,146 +2,273 @@
 <html lang="hu">
 <head>
     <meta charset="UTF-8">
-    <title>Agar.io Multiplayer - Power-upokkal</title>
+    <title>Többjátékos Agar.io Klón - Javított</title>
     <style>
-        canvas { border: 2px solid white; background: #1a1a1a; display: block; margin: auto; }
+        canvas { border: 2px solid white; background: #1a1a1a; display: block; margin: 0 auto; }
         body { background: #333; text-align: center; color: white; font-family: Arial, sans-serif; }
+        #hud { margin: 8px auto; width: 800px; display:flex; justify-content:space-between; align-items:center; }
+        button { padding:6px 10px; border-radius:6px; border:none; cursor:pointer; }
     </style>
 </head>
 <body>
-    <h3>WASD: mozgás | Gyűjtsd az ételeket, vedd fel a power-upokat!</h3>
+    <h3>J1: W,A,S,D | J2: Nyilak | Gyűjtsd az ételeket, kerüld az ütközést!</h3>
+    <div id="hud">
+        <div>J1: <span id="score1">0</span></div>
+        <div><button id="pauseBtn">Szünet</button> <button id="resetBtn">Reset</button></div>
+        <div>J2: <span id="score2">0</span></div>
+    </div>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
 
-    <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io();
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const score1El = document.getElementById('score1');
+    const score2El = document.getElementById('score2');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const resetBtn = document.getElementById('resetBtn');
 
-        const canvas = document.getElementById("gameCanvas");
-        const ctx = canvas.getContext("2d");
+    // állapot inicializálás
+    function makePlayer(x,y){ return { x, y, radius:20, baseSpeed:5, boost:1, boostUntil:0, flashUntil:0 }; }
+    let player1 = makePlayer(200,300);
+    let player2 = makePlayer(600,300);
+    let score1 = 0, score2 = 0;
 
-        let playerId = null;
-        let players = {};
-        let foods = [];
-        let powerUps = [];
+    // ételek
+    const foods = [];
+    const foodCount = 20;
+    for(let i=0;i<foodCount;i++) foods.push(randomFood());
 
-        const keys = {};
-        document.addEventListener("keydown", e => keys[e.key] = true);
-        document.addEventListener("keyup", e => keys[e.key] = false);
+    function randomFood(){ return { x: Math.random()*canvas.width, y: Math.random()*canvas.height, radius:5, type:'food' }; }
 
-        socket.on("init", (data) => {
-            playerId = data.id;
-            foods = data.foods;
-            powerUps = data.powerUps;
-            players = data.players;
-        });
+    // power-up spawn időzítés (ms alapú)
+    let speedBoost = null;
+    let spawnTimer = 0;
+    const spawnInterval = 4000; // ms - megpróbál spawnolni minden 4s
 
-        socket.on("updatePlayers", (serverPlayers) => {
-            players = serverPlayers;
-        });
+    // játékidő ms-ben
+    let gameTimeMs = 60_000; // 60s
+    let startTime = performance.now();
 
-        socket.on("updateFoods", (serverFoods) => {
-            foods = serverFoods;
-        });
+    // input
+    const keys = {};
+    document.addEventListener('keydown', e => keys[e.key] = true);
+    document.addEventListener('keyup', e => keys[e.key] = false);
 
-        socket.on("updatePowerUps", (serverPowerUps) => {
-            powerUps = serverPowerUps;
-        });
+    // pause
+    let paused = false;
+    pauseBtn.addEventListener('click', () => {
+        paused = !paused;
+        pauseBtn.textContent = paused ? 'Folytat' : 'Szünet';
+        if(!paused) lastTime = performance.now(); // reset timestamp
+    });
 
-        socket.on("removePlayer", (id) => {
-            delete players[id];
-        });
+    // reset gomb
+    resetBtn.addEventListener('click', resetGame);
 
-        function movePlayer() {
-            const me = players[playerId];
-            if (!me) return;
+    function resetGame(){
+        player1 = makePlayer(200,300);
+        player2 = makePlayer(600,300);
+        score1 = 0; score2 = 0;
+        foods.forEach(f => { f.x = Math.random()*canvas.width; f.y = Math.random()*canvas.height; });
+        speedBoost = null;
+        startTime = performance.now();
+        spawnTimer = 0;
+        updateHUD();
+    }
 
-            let speed = me.speed * me.boost;
-            if (me.slowUntil && Date.now() < me.slowUntil) speed *= 0.5;
+    function updateHUD(){
+        score1El.textContent = score1;
+        score2El.textContent = score2;
+    }
 
-            if (keys.w && me.y - me.radius > 0) me.y -= speed;
-            if (keys.s && me.y + me.radius < canvas.height) me.y += speed;
-            if (keys.a && me.x - me.radius > 0) me.x -= speed;
-            if (keys.d && me.x + me.radius < canvas.width) me.x += speed;
+    // segédfüggvény: szabályozzuk a radius növekedést és a sebességet
+    function effectiveSpeed(player){
+        // nagyobb gömb lassabb legyen (egyszerű korrekció)
+        const sizeFactor = Math.max(1, player.radius / 20);
+        return (player.baseSpeed / Math.sqrt(sizeFactor)) * player.boost;
+    }
 
-            foods.forEach(food => {
-                const dist = Math.hypot(me.x - food.x, me.y - food.y);
-                if (dist < me.radius + food.radius) {
-                    me.score++;
-                    me.radius += 1;
-                    socket.emit("eatFood", food.id);
-                }
-            });
+    // mozgás, gyűjtés, ütközés időalapú
+    function movePlayers(dt){
+        // dt millisekundumban
+        const moveAmount1 = effectiveSpeed(player1) * (dt/16.6667); // referenciának ~60fps frametime
+        const moveAmount2 = effectiveSpeed(player2) * (dt/16.6667);
 
-            powerUps.forEach(pu => {
-                const dist = Math.hypot(me.x - pu.x, me.y - pu.y);
-                if (dist < me.radius + pu.radius) {
-                    if (pu.type === "speed") {
-                        me.boost = 1.5;
-                        setTimeout(() => me.boost = 1, 5000);
-                    }
-                    if (pu.type === "shield") {
-                        me.shield = true;
-                        setTimeout(() => me.shield = false, 5000);
-                    }
-                    if (pu.type === "slow") {
-                        Object.values(players).forEach(p => {
-                            if (p.id !== me.id) p.slowUntil = Date.now() + 5000;
-                        });
-                    }
-                    socket.emit("pickupPowerUp", pu.id);
-                }
-            });
+        if(keys.w && player1.y - player1.radius > 0) player1.y -= moveAmount1;
+        if(keys.s && player1.y + player1.radius < canvas.height) player1.y += moveAmount1;
+        if(keys.a && player1.x - player1.radius > 0) player1.x -= moveAmount1;
+        if(keys.d && player1.x + player1.radius < canvas.width) player1.x += moveAmount1;
 
-            socket.emit("move", me);
+        if(keys.ArrowUp && player2.y - player2.radius > 0) player2.y -= moveAmount2;
+        if(keys.ArrowDown && player2.y + player2.radius < canvas.height) player2.y += moveAmount2;
+        if(keys.ArrowLeft && player2.x - player2.radius > 0) player2.x -= moveAmount2;
+        if(keys.ArrowRight && player2.x + player2.radius < canvas.width) player2.x += moveAmount2;
+
+        // boost idő ms alapon
+        const now = performance.now();
+        if(player1.boostUntil > now){ player1.boost = 1.5; } else { player1.boost = 1; player1.boostUntil = 0; }
+        if(player2.boostUntil > now){ player2.boost = 1.5; } else { player2.boost = 1; player2.boostUntil = 0; }
+
+        // flash timeout
+        if(player1.flashUntil <= now) player1.flashUntil = Math.max(0, player1.flashUntil);
+        if(player2.flashUntil <= now) player2.flashUntil = Math.max(0, player2.flashUntil);
+    }
+
+    function spawnSpeedBoost(dt){
+        spawnTimer += dt;
+        if(!speedBoost && spawnTimer >= spawnInterval){
+            // 40% esély, ha nem jön akkor újra várunk
+            if(Math.random() < 0.4){
+                speedBoost = { x: Math.random()*canvas.width, y: Math.random()*canvas.height, radius:8, type:'speed' };
+            }
+            spawnTimer = 0;
+        }
+    }
+
+    function checkCollisions(){
+        // ételek gyűjtése
+        for(let i=0;i<foods.length;i++){
+            const f = foods[i];
+            const d1 = Math.hypot(player1.x - f.x, player1.y - f.y);
+            if(d1 < player1.radius + f.radius){
+                score1++;
+                player1.radius = Math.min(120, player1.radius + 1); // cap a túl nagy növekedés elkerülésére
+                foods[i] = randomFood();
+            }
+            const d2 = Math.hypot(player2.x - f.x, player2.y - f.y);
+            if(d2 < player2.radius + f.radius){
+                score2++;
+                player2.radius = Math.min(120, player2.radius + 1);
+                foods[i] = randomFood();
+            }
         }
 
-        function draw() {
-            ctx.fillStyle = "#1a1a1a";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // foods
-            ctx.fillStyle = "yellow";
-            foods.forEach(f => {
-                ctx.beginPath();
-                ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
-                ctx.fill();
-            });
-
-            // power-ups
-            powerUps.forEach(pu => {
-                if (pu.type === "speed") ctx.fillStyle = "green";
-                if (pu.type === "shield") ctx.fillStyle = "cyan";
-                if (pu.type === "slow") ctx.fillStyle = "orange";
-                ctx.beginPath();
-                ctx.arc(pu.x, pu.y, pu.radius, 0, Math.PI * 2);
-                ctx.fill();
-            });
-
-            // players
-            for (const id in players) {
-                const p = players[id];
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.fillStyle = "white";
-                ctx.font = "12px Arial";
-                ctx.fillText(p.score, p.x - 5, p.y - p.radius - 5);
-                if (p.shield) {
-                    ctx.strokeStyle = "cyan";
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, p.radius + 3, 0, Math.PI * 2);
-                    ctx.stroke();
+        // power-up gyűjtés - előbb ellenőrizzük, hogy létezik
+        if(speedBoost){
+            const now = performance.now();
+            const d1 = Math.hypot(player1.x - speedBoost.x, player1.y - speedBoost.y);
+            if(d1 < player1.radius + speedBoost.radius){
+                player1.boostUntil = now + 5000; // 5000 ms = 5s
+                speedBoost = null;
+            } else {
+                const d2 = Math.hypot(player2.x - speedBoost.x, player2.y - speedBoost.y);
+                if(d2 < player2.radius + speedBoost.radius){
+                    player2.boostUntil = now + 5000;
+                    speedBoost = null;
                 }
             }
         }
 
-        function gameLoop() {
-            movePlayer();
-            draw();
-            requestAnimationFrame(gameLoop);
+        // játékosok ütközése
+        const distPlayers = Math.hypot(player1.x - player2.x, player1.y - player2.y);
+        if(distPlayers < player1.radius + player2.radius){
+            // nagyobb "megeszi" a kisebbet csak ha jelentős a különbség
+            if(player1.radius > player2.radius + 5){
+                player1.radius = Math.min(120, player1.radius + Math.floor(player2.radius/2));
+                score1 += 5;
+                player1.flashUntil = performance.now() + 500; // 0.5s flash
+                // reset kisebb játékos
+                player2 = makePlayer(600,300);
+                score2 = Math.max(0, score2 - 5);
+            } else if(player2.radius > player1.radius + 5){
+                player2.radius = Math.min(120, player2.radius + Math.floor(player1.radius/2));
+                score2 += 5;
+                player2.flashUntil = performance.now() + 500;
+                player1 = makePlayer(200,300);
+                score1 = Math.max(0, score1 - 5);
+            } else {
+                // ha közel azonosak, pattanjanak szét egy kicsit
+                const overlap = (player1.radius + player2.radius) - distPlayers;
+                const nx = (player2.x - player1.x) / distPlayers;
+                const ny = (player2.y - player1.y) / distPlayers;
+                player1.x -= nx * overlap * 0.5;
+                player1.y -= ny * overlap * 0.5;
+                player2.x += nx * overlap * 0.5;
+                player2.y += ny * overlap * 0.5;
+            }
         }
-        gameLoop();
+    }
+
+    function draw(remainingMs){
+        // háttér és rács
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        for(let x=0;x<canvas.width;x+=50){
+            ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke();
+        }
+        for(let y=0;y<canvas.height;y+=50){
+            ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke();
+        }
+
+        // ételek
+        ctx.fillStyle = 'yellow';
+        foods.forEach(f => { ctx.beginPath(); ctx.arc(f.x,f.y,f.radius,0,Math.PI*2); ctx.fill(); });
+
+        // speed boost
+        if(speedBoost){
+            ctx.fillStyle = 'green';
+            ctx.beginPath(); ctx.arc(speedBoost.x,speedBoost.y,speedBoost.radius,0,Math.PI*2); ctx.fill();
+            // kis ikont rajzolhatunk
+            ctx.fillStyle = 'white';
+            ctx.font = '10px Arial';
+            ctx.fillText('↗', speedBoost.x-4, speedBoost.y+3);
+        }
+
+        // játékosok
+        const now = performance.now();
+        ctx.fillStyle = (player1.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'blue') : 'blue');
+        ctx.beginPath(); ctx.arc(player1.x, player1.y, player1.radius, 0, Math.PI*2); ctx.fill();
+
+        ctx.fillStyle = (player2.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'red') : 'red');
+        ctx.beginPath(); ctx.arc(player2.x, player2.y, player2.radius, 0, Math.PI*2); ctx.fill();
+
+        // HUD szöveg
+        ctx.fillStyle = 'white';
+        ctx.font = '18px Arial';
+        ctx.fillText(`J1: ${score1}`, 10, 22);
+        ctx.fillText(`J2: ${score2}`, canvas.width - 80, 22);
+
+        // idő
+        const remainingSec = Math.max(0, (remainingMs / 1000)).toFixed(1);
+        ctx.fillText(`Idő: ${remainingSec}s`, canvas.width/2 - 40, 22);
+    }
+
+    // fő loop - deltaTime-al
+    let lastTime = performance.now();
+    function loop(now){
+        if(paused){ lastTime = now; requestAnimationFrame(loop); return; }
+        const dt = now - lastTime; // ms
+        lastTime = now;
+
+        // előrehaladás
+        const elapsed = now - startTime;
+        const remainingMs = Math.max(0, gameTimeMs - elapsed);
+
+        // lépések
+        movePlayers(dt);
+        spawnSpeedBoost(dt);
+        checkCollisions();
+        draw(remainingMs);
+
+        updateHUD();
+
+        if(remainingMs <= 0){
+            // vége egyszer
+            const winner = score1 > score2 ? 'Játékos 1' : score2 > score1 ? 'Játékos 2' : 'Döntetlen';
+            setTimeout(()=> alert(`Játék vége! ${winner} nyert! J1: ${score1}, J2: ${score2}`), 10);
+            resetGame();
+            // újraindítjuk időbélyegzőt
+            startTime = performance.now();
+            lastTime = performance.now();
+        }
+
+        requestAnimationFrame(loop);
+    }
+
+    // indítás
+    resetGame();
+    requestAnimationFrame(loop);
     </script>
 </body>
 </html>
