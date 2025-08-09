@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <title>Agar.io Multiplayer - Power-upokkal</title>
+    <style>
+        canvas { border: 2px solid white; background: #1a1a1a; display: block; margin: auto; }
+        body { background: #333; text-align: center; color: white; font-family: Arial, sans-serif; }
+    </style>
+</head>
+<body>
+    <h3>WASD: mozgás | Gyűjtsd az ételeket, vedd fel a power-upokat!</h3>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let playerId = null;
+        let players = {};
+        let foods = [];
+        let powerUps = [];
+
+        const keys = {};
+        document.addEventListener("keydown", e => keys[e.key] = true);
+        document.addEventListener("keyup", e => keys[e.key] = false);
+
+        socket.on("init", (data) => {
+            playerId = data.id;
+            foods = data.foods;
+            powerUps = data.powerUps;
+            players = data.players;
+        });
+
+        socket.on("updatePlayers", (serverPlayers) => {
+            players = serverPlayers;
+        });
+
+        socket.on("updateFoods", (serverFoods) => {
+            foods = serverFoods;
+        });
+
+        socket.on("updatePowerUps", (serverPowerUps) => {
+            powerUps = serverPowerUps;
+        });
+
+        socket.on("removePlayer", (id) => {
+            delete players[id];
+        });
+
+        function movePlayer() {
+            const me = players[playerId];
+            if (!me) return;
+
+            let speed = me.speed * me.boost;
+            if (me.slowUntil && Date.now() < me.slowUntil) speed *= 0.5;
+
+            if (keys.w && me.y - me.radius > 0) me.y -= speed;
+            if (keys.s && me.y + me.radius < canvas.height) me.y += speed;
+            if (keys.a && me.x - me.radius > 0) me.x -= speed;
+            if (keys.d && me.x + me.radius < canvas.width) me.x += speed;
+
+            foods.forEach(food => {
+                const dist = Math.hypot(me.x - food.x, me.y - food.y);
+                if (dist < me.radius + food.radius) {
+                    me.score++;
+                    me.radius += 1;
+                    socket.emit("eatFood", food.id);
+                }
+            });
+
+            powerUps.forEach(pu => {
+                const dist = Math.hypot(me.x - pu.x, me.y - pu.y);
+                if (dist < me.radius + pu.radius) {
+                    if (pu.type === "speed") {
+                        me.boost = 1.5;
+                        setTimeout(() => me.boost = 1, 5000);
+                    }
+                    if (pu.type === "shield") {
+                        me.shield = true;
+                        setTimeout(() => me.shield = false, 5000);
+                    }
+                    if (pu.type === "slow") {
+                        Object.values(players).forEach(p => {
+                            if (p.id !== me.id) p.slowUntil = Date.now() + 5000;
+                        });
+                    }
+                    socket.emit("pickupPowerUp", pu.id);
+                }
+            });
+
+            socket.emit("move", me);
+        }
+
+        function draw() {
+            ctx.fillStyle = "#1a1a1a";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // foods
+            ctx.fillStyle = "yellow";
+            foods.forEach(f => {
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // power-ups
+            powerUps.forEach(pu => {
+                if (pu.type === "speed") ctx.fillStyle = "green";
+                if (pu.type === "shield") ctx.fillStyle = "cyan";
+                if (pu.type === "slow") ctx.fillStyle = "orange";
+                ctx.beginPath();
+                ctx.arc(pu.x, pu.y, pu.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // players
+            for (const id in players) {
+                const p = players[id];
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "white";
+                ctx.font = "12px Arial";
+                ctx.fillText(p.score, p.x - 5, p.y - p.radius - 5);
+                if (p.shield) {
+                    ctx.strokeStyle = "cyan";
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius + 3, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function gameLoop() {
+            movePlayer();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        gameLoop();
+    </script>
+</body>
+</html>
