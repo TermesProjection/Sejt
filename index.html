@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Agar-klón — optimalizált, split/eject/powerups, minimap</title>
+<title>Agar-klón — NPC ellenségekkel</title>
 <style>
 :root{--bg:#111;--panel:#222;--text:#fff;--accent:#3aa;--danger:#e44;}
 html,body{height:100%;margin:0;background:var(--panel);color:var(--text);font-family:Arial,Helvetica,sans-serif}
@@ -57,8 +57,7 @@ canvas{display:block;margin:8px auto;border:2px solid rgba(255,255,255,0.06);bac
 
 <script>
 /* -----------------------
-  Egyfájlos optimized Agar-klón
-  Tartalmaz: pooling, spatial grid, minimap, split/eject, power-ups, touch/gamepad
+  Agar-klón NPC ellenségekkel
   ----------------------- */
 
 /* ---------- KONFIG ---------- */
@@ -81,6 +80,7 @@ let GRID_SIZE = 220;
 
 const MAX_PLAYER_RADIUS = 180;
 const MIN_PLAYER_RADIUS = 12;
+const NPC_COUNT = 15; // NPC ellenségek száma
 
 /* ---------- HELPEREK ---------- */
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
@@ -163,6 +163,7 @@ function moveToCell(obj, newX, newY){
 let foods = []; // references to foodPool entries currently active
 let pellets = []; // active pellets
 let fragments = []; // active split pieces
+let npcs = []; // NPC ellenségek
 
 // players (keep as simple single-entity plus fragments)
 function makePlayer(x,y,color){
@@ -177,6 +178,25 @@ function makePlayer(x,y,color){
         id: Math.random().toString(36).slice(2,9)
     };
 }
+
+// NPC létrehozása
+function makeNPC(){
+    const colors = ['#8f4', '#f84', '#48f', '#f8f', '#8ff', '#ff8'];
+    const x = Math.random() * worldWidth;
+    const y = Math.random() * worldHeight;
+    return {
+        x, y,
+        radius: 15 + Math.random() * 15,
+        baseSpeed: 4 + Math.random(),
+        targetX: x,
+        targetY: y,
+        targetChangeTime: 0,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        score: 0,
+        id: 'npc_' + Math.random().toString(36).slice(2,7)
+    };
+}
+
 let player1 = makePlayer(worldWidth*0.25, worldHeight*0.5,'blue');
 let player2 = makePlayer(worldWidth*0.75, worldHeight*0.5,'red');
 
@@ -199,6 +219,15 @@ function spawnFoods(count){
         f.x = x; f.y = y; f.radius = r; f.type='food';
         addToCell(f);
         foods.push(f);
+    }
+}
+
+// NPC-k inicializálása
+function initNPCs(){
+    npcs = [];
+    for(let i=0; i<NPC_COUNT; i++){
+        const npc = makeNPC();
+        npcs.push(npc);
     }
 }
 
@@ -348,6 +377,81 @@ function doEject(player){
     addToCell(p);
 }
 
+/* ---------- NPC AI ---------- */
+function updateNPCs(dt){
+    const now = nowMs();
+    
+    for(const npc of npcs){
+        // Véletlenszerű célpont változtatás időnként
+        if(now > npc.targetChangeTime || 
+           Math.abs(npc.x - npc.targetX) < 10 && Math.abs(npc.y - npc.targetY) < 10){
+            npc.targetX = Math.random() * worldWidth;
+            npc.targetY = Math.random() * worldHeight;
+            npc.targetChangeTime = now + 2000 + Math.random() * 3000;
+        }
+        
+        // Mozgás a célpont felé
+        const dx = npc.targetX - npc.x;
+        const dy = npc.targetY - npc.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        
+        if(dist > 0){
+            const speed = effectiveSpeed(npc) * (dt/16.6667);
+            npc.x += (dx/dist) * speed;
+            npc.y += (dy/dist) * speed;
+        }
+        
+        // Ételek keresése a közelben
+        const nearby = queryNearby(npc.x, npc.y, npc.radius + 100);
+        let closestFood = null;
+        let closestDist = Infinity;
+        
+        for(const obj of nearby){
+            if(obj.type === 'food'){
+                const d = dist2(npc.x, npc.y, obj.x, obj.y);
+                if(d < closestDist){
+                    closestDist = d;
+                    closestFood = obj;
+                }
+            }
+        }
+        
+        // Ha talált ételt, arra mozog
+        if(closestFood){
+            const fdx = closestFood.x - npc.x;
+            const fdy = closestFood.y - npc.y;
+            const fdist = Math.sqrt(fdx*fdx + fdy*fdy);
+            
+            if(fdist > 0){
+                const speed = effectiveSpeed(npc) * (dt/16.6667);
+                npc.x += (fdx/fdist) * speed;
+                npc.y += (fdy/fdist) * speed;
+            }
+        }
+        
+        // Játékosok elkerülése, ha nagyobbak
+        for(const player of [player1, player2]){
+            if(player.radius > npc.radius * 1.2){
+                const pdx = npc.x - player.x;
+                const pdy = npc.y - player.y;
+                const pdist = Math.sqrt(pdx*pdx + pdy*pdy);
+                
+                if(pdist < player.radius + npc.radius + 200){
+                    const avoidSpeed = effectiveSpeed(npc) * (dt/16.6667) * 1.5;
+                    if(pdist > 0){
+                        npc.x += (pdx/pdist) * avoidSpeed;
+                        npc.y += (pdy/pdist) * avoidSpeed;
+                    }
+                }
+            }
+        }
+        
+        // Világ határain belül tartás
+        npc.x = clamp(npc.x, npc.radius, worldWidth - npc.radius);
+        npc.y = clamp(npc.y, npc.radius, worldHeight - npc.radius);
+    }
+}
+
 /* ---------- INPUT DIRECTION helper ---------- */
 // playerIndex 1 or 2
 function getInputDirection(playerIdx){
@@ -396,6 +500,9 @@ function getInputDirection(playerIdx){
 
 /* ---------- COLLISIONS / UPDATES ---------- */
 function updateEntities(dt){
+    // NPC-k frissítése
+    updateNPCs(dt);
+    
     // move pellets
     for(let i=pellets.length-1;i>=0;i--){
         const p = pellets[i];
@@ -464,6 +571,11 @@ function checkCollisions(){
     // players collect foods/powerups/pellets/fragments interactions
     handlePlayerPickup(player1);
     handlePlayerPickup(player2);
+    
+    // NPC-k ételek felvétele
+    for(const npc of npcs){
+        handleNPCPickup(npc);
+    }
 
     // fragments and pellets can be eaten by players/fragments
     for(const frag of fragments){
@@ -524,6 +636,17 @@ function checkCollisions(){
             pellets.splice(i,1);
             continue;
         }
+        // NPC-k
+        for(const npc of npcs){
+            const rsum = npc.radius + p.radius;
+            if(dist2(npc.x,npc.y,p.x,p.y) < rsum*rsum){
+                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + p.radius*0.6);
+                removeFromCell(p);
+                pelletPool.push(p);
+                pellets.splice(i,1);
+                break;
+            }
+        }
     }
 
     // players collide with foods and powerups (optimized: queryNearby)
@@ -553,6 +676,34 @@ function checkCollisions(){
     }
     playerFoodAndPower(player1);
     playerFoodAndPower(player2);
+    
+    // NPC-k ételek és powerupok felvétele
+    function handleNPCPickup(npc){
+        const q = queryNearby(npc.x, npc.y, npc.radius + 8);
+        for(const o of q){
+            if(o.type === 'food'){
+                const rsum = npc.radius + o.radius;
+                if(dist2(npc.x,npc.y,o.x,o.y) < rsum*rsum){
+                    const grow = Math.max(0.5, 2 * (20 / Math.max(20, npc.radius)));
+                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + grow);
+                    npc.score++;
+                    moveToRandomFood(o);
+                }
+            } else if(o.type === 'power'){
+                const rsum = npc.radius + o.radius;
+                if(dist2(npc.x,npc.y,o.x,o.y) < rsum*rsum){
+                    // NPC-k csak a mass powerupt használják
+                    if(o.kind === 'mass'){
+                        npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + 6);
+                    }
+                    removeFromCell(o);
+                    powerupPool.push(o);
+                    const idx = powerups.indexOf(o);
+                    if(idx>=0) powerups.splice(idx,1);
+                }
+            }
+        }
+    }
 
     // player-player collisions (eating)
     const dx = player2.x - player1.x, dy = player2.y - player1.y;
@@ -578,6 +729,87 @@ function checkCollisions(){
             player1.y -= ny * overlap * 0.5;
             player2.x += nx * overlap * 0.5;
             player2.y += ny * overlap * 0.5;
+        }
+    }
+    
+    // NPC-k ütközései a játékosokkal és egymással
+    for(let i=npcs.length-1; i>=0; i--){
+        const npc = npcs[i];
+        
+        // Játékosokkal való ütközés
+        for(const player of [player1, player2]){
+            const dx = player.x - npc.x;
+            const dy = player.y - npc.y;
+            const d2 = dx*dx + dy*dy;
+            const rsum = player.radius + npc.radius;
+            
+            if(d2 > 0 && d2 < rsum*rsum){
+                if(player.radius > npc.radius + 6){
+                    // Játékos megeszi az NPC-t
+                    player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + Math.floor(npc.radius*0.6));
+                    player.score += 5;
+                    // NPC újraéledése
+                    npcs.splice(i,1);
+                    npcs.push(makeNPC());
+                    break;
+                } else if(npc.radius > player.radius + 6){
+                    // NPC megeszi a játékost
+                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(player.radius*0.6));
+                    npc.score += 5;
+                    // Játékos visszaállítása
+                    if(player === player1){
+                        resetPlayerTo(player1, worldWidth*0.25, worldHeight*0.5);
+                    } else {
+                        resetPlayerTo(player2, worldWidth*0.75, worldHeight*0.5);
+                    }
+                } else {
+                    // Rugalmas ütközés
+                    const dist = Math.sqrt(d2);
+                    const overlap = (rsum - dist);
+                    const nx = dx / dist, ny = dy / dist;
+                    player.x += nx * overlap * 0.5;
+                    player.y += ny * overlap * 0.5;
+                    npc.x -= nx * overlap * 0.5;
+                    npc.y -= ny * overlap * 0.5;
+                }
+            }
+        }
+        
+        // NPC-k egymással való ütközése
+        for(let j=npcs.length-1; j>i; j--){
+            const other = npcs[j];
+            const dx = other.x - npc.x;
+            const dy = other.y - npc.y;
+            const d2 = dx*dx + dy*dy;
+            const rsum = npc.radius + other.radius;
+            
+            if(d2 > 0 && d2 < rsum*rsum){
+                if(npc.radius > other.radius + 6){
+                    // NPC megeszi a másik NPC-t
+                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(other.radius*0.6));
+                    npc.score += 3;
+                    // Másik NPC eltávolítása és újraélesztése
+                    npcs.splice(j,1);
+                    npcs.push(makeNPC());
+                } else if(other.radius > npc.radius + 6){
+                    // Másik NPC megeszi ezt az NPC-t
+                    other.radius = Math.min(MAX_PLAYER_RADIUS, other.radius + Math.floor(npc.radius*0.6));
+                    other.score += 3;
+                    // NPC eltávolítása és újraélesztése
+                    npcs.splice(i,1);
+                    npcs.push(makeNPC());
+                    break;
+                } else {
+                    // Rugalmas ütközés
+                    const dist = Math.sqrt(d2);
+                    const overlap = (rsum - dist);
+                    const nx = dx / dist, ny = dy / dist;
+                    npc.x -= nx * overlap * 0.5;
+                    npc.y -= ny * overlap * 0.5;
+                    other.x += nx * overlap * 0.5;
+                    other.y += ny * overlap * 0.5;
+                }
+            }
         }
     }
 }
@@ -680,6 +912,16 @@ function draw(remainingMs){
         ctx.fillStyle = f.owner===player1 ? 'rgba(120,170,255,0.95)' : 'rgba(255,140,140,0.95)';
         ctx.arc(sx,sy,f.radius,0,Math.PI*2); ctx.fill();
     }
+    
+    // NPC-k
+    for(const npc of npcs){
+        const sx = npc.x - camX, sy = npc.y - camY;
+        if(sx + npc.radius < 0 || sx - npc.radius > canvas.width || sy + npc.radius < 0 || sy - npc.radius > canvas.height) continue;
+        ctx.beginPath();
+        ctx.fillStyle = npc.color;
+        ctx.arc(sx,sy,npc.radius,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='white'; ctx.font='10px Arial'; ctx.fillText('NPC', sx-10, sy+3);
+    }
 
     // players
     const now = nowMs();
@@ -727,6 +969,11 @@ function drawMinimap(){
     }
     // powerups
     for(const p of powerups){ c.fillStyle = p.kind==='speed' ? '#3af' : p.kind==='shield' ? '#ffb' : '#9f3'; c.fillRect(p.x * sx, p.y * sy, 3,3); }
+    // NPC-k
+    for(const npc of npcs){
+        c.fillStyle = npc.color;
+        c.beginPath(); c.arc(npc.x * sx, npc.y * sy, Math.max(2, npc.radius*sx), 0, Math.PI*2); c.fill();
+    }
     // players
     c.fillStyle='blue'; c.beginPath(); c.arc(player1.x * sx, player1.y * sy, Math.max(2, player1.radius*sx), 0, Math.PI*2); c.fill();
     c.fillStyle='red'; c.beginPath(); c.arc(player2.x * sx, player2.y * sy, Math.max(2, player2.radius*sy), 0, Math.PI*2); c.fill();
@@ -742,6 +989,12 @@ function updateScoreboard(){
         {name:'J1', score:player1.score, size: int(player1.radius)},
         {name:'J2', score:player2.score, size: int(player2.radius)}
     ];
+    
+    // NPC-k hozzáadása a scoreboardhoz
+    for(const npc of npcs){
+        items.push({name:'NPC', score:npc.score, size: int(npc.radius)});
+    }
+    
     items.sort((a,b)=>b.size - a.size);
     sbEl.innerHTML = 'Top:<br>' + items.map(it=>`${it.name} — méret: ${it.size} / pont: ${it.score}`).join('<br>');
     score1El.textContent = player1.score;
@@ -863,6 +1116,8 @@ function startGame(){
     player1 = makePlayer(worldWidth*0.25, worldHeight*0.5,'blue');
     player2 = makePlayer(worldWidth*0.75, worldHeight*0.5,'red');
     player1.score = 0; player2.score = 0;
+    // NPC-k inicializálása
+    initNPCs();
     startTime = nowMs();
     paused = false;
     lastTime = nowMs();
