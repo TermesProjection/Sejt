@@ -1,325 +1,882 @@
 <!DOCTYPE html>
 <html lang="hu">
 <head>
-    <meta charset="UTF-8">
-    <title>Többjátékos Agar.io Klón — Saját játékosra fix kamera (5000×5000)</title>
-    <style>
-        canvas { border: 2px solid white; background: #1a1a1a; display: block; margin: 0 auto; }
-        body { background: #333; text-align: center; color: white; font-family: Arial, sans-serif; }
-        #hud { margin: 8px auto; width: 800px; display:flex; justify-content:space-between; align-items:center; }
-        button { padding:6px 10px; border-radius:6px; border:none; cursor:pointer; }
-    </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Agar-klón — optimalizált, split/eject/powerups, minimap</title>
+<style>
+:root{--bg:#111;--panel:#222;--text:#fff;--accent:#3aa;--danger:#e44;}
+html,body{height:100%;margin:0;background:var(--panel);color:var(--text);font-family:Arial,Helvetica,sans-serif}
+.container{max-width:1400px;margin:10px auto;padding:6px;}
+#topbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+#hud{display:flex;gap:12px;align-items:center}
+button{padding:6px 10px;border-radius:6px;border:none;background:#444;color:white;cursor:pointer}
+.small{font-size:13px;opacity:0.95}
+canvas{display:block;margin:8px auto;border:2px solid rgba(255,255,255,0.06);background:var(--bg);touch-action:none}
+#controlsDesc{font-size:13px;opacity:0.9}
+#minimap{position:absolute;right:18px;bottom:18px;width:180px;height:120px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.25);padding:6px}
+#overlayButtons{position:fixed;right:18px;top:120px;display:flex;flex-direction:column;gap:8px}
+.overlayBtn{width:64px;height:44px;border-radius:8px;background:#444;color:#fff;border:none;opacity:0.95}
+.scoreboard{position:absolute;left:18px;top:18px;background:rgba(0,0,0,0.25);padding:8px;border-radius:6px;font-size:13px}
+.touchInfo{position:fixed;left:50%;transform:translateX(-50%);bottom:6px;background:rgba(0,0,0,0.2);padding:6px;border-radius:6px;font-size:12px}
+@media(max-width:700px){
+    #minimap{width:120px;height:80px;right:8px;bottom:8px}
+    .scoreboard{left:8px;top:8px}
+}
+</style>
 </head>
 <body>
-    <h3>J1: W,A,S,D | J2: Nyilak | Világ: 50000×50000 — a kamera a saját játékoson van</h3>
-    <div id="hud">
-        <div>J1: <span id="score1">0</span></div>
-        <div><button id="pauseBtn">Szünet</button> <button id="resetBtn">Reset</button></div>
-        <div>J2: <span id="score2">0</span></div>
+<div class="container">
+    <div id="topbar">
+        <div id="hud">
+            <div>J1 (kék): <span id="score1">0</span></div>
+            <div>J2 (piros): <span id="score2">0</span></div>
+            <div id="controlsDesc" class="small">J1: W A S D (mozog) • Space: split • Q: eject • J2: Nyilak • RShift: eject • Enter: split</div>
+        </div>
+        <div>
+            <button id="fullscreenBtn">Fullscreen</button>
+            <button id="pauseBtn">Szünet</button>
+            <button id="resetBtn">Reset</button>
+            <label class="small" style="margin-left:8px">Foods:
+                <input id="foodCountInput" type="number" min="200" step="200" value="8000" style="width:90px">
+            </label>
+        </div>
     </div>
-    <canvas id="gameCanvas" width="1200" height="800"></canvas>
 
-    <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const score1El = document.getElementById('score1');
-    const score2El = document.getElementById('score2');
-    const pauseBtn = document.getElementById('pauseBtn');
-    const resetBtn = document.getElementById('resetBtn');
+    <div style="position:relative;">
+        <canvas id="gameCanvas"></canvas>
+        <div id="minimap"></div>
+        <div class="scoreboard" id="scoreboardEl">Top: —</div>
+    </div>
+    <div id="overlayButtons">
+        <button class="overlayBtn" id="splitBtn">SPLIT</button>
+        <button class="overlayBtn" id="ejectBtn">EJECT</button>
+    </div>
+    <div class="touchInfo small">Érintés: bal oldalon mozgatás, jobb oldalon split/eject gombok</div>
+</div>
 
-    // --- VILÁG MÉRETE
-    const worldWidth = 50000;
-    const worldHeight = 50000;
+<script>
+/* -----------------------
+  Egyfájlos optimized Agar-klón
+  Tartalmaz: pooling, spatial grid, minimap, split/eject, power-ups, touch/gamepad
+  ----------------------- */
 
-    function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
-    function makePlayer(x,y){ return { x, y, radius:20, baseSpeed:5, boost:1, boostUntil:0, flashUntil:0 }; }
+/* ---------- KONFIG ---------- */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const minimapEl = document.getElementById('minimap');
+const sbEl = document.getElementById('scoreboardEl');
+const score1El = document.getElementById('score1');
+const score2El = document.getElementById('score2');
+const pauseBtn = document.getElementById('pauseBtn');
+const resetBtn = document.getElementById('resetBtn');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+const foodCountInput = document.getElementById('foodCountInput');
+const splitBtn = document.getElementById('splitBtn');
+const ejectBtn = document.getElementById('ejectBtn');
 
-    // player1 = LOCAL PLAYER (a kamera erre lesz rögzítve)
-    let player1 = makePlayer(worldWidth * 0.25, worldHeight * 0.5);
-    let player2 = makePlayer(worldWidth * 0.75, worldHeight * 0.5);
-    let score1 = 0, score2 = 0;
+let worldWidth = 50000, worldHeight = 50000;
+let foodCount = parseInt(foodCountInput.value,10) || 8000;
+let GRID_SIZE = 220;
 
-    // ételek világ-koordinátában
-    const foods = [];
-    const foodCount = 12000;
-    for(let i=0;i<foodCount;i++) foods.push(randomFood());
+const MAX_PLAYER_RADIUS = 180;
+const MIN_PLAYER_RADIUS = 12;
 
-    function randomFood(){
+/* ---------- HELPEREK ---------- */
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function dist2(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return dx*dx + dy*dy; }
+function nowMs(){ return performance.now(); }
+function rand(min,max){ return min + Math.random()*(max-min); }
+function int(n){ return Math.floor(n); }
+
+/* ---------- CANVAS RESIZE ---------- */
+function resizeCanvas(){
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const availW = Math.min(window.innerWidth - 40, 1400);
+    const availH = Math.min(window.innerHeight - 140, 900);
+    const targetW = Math.max(680, Math.round(availW));
+    const targetH = Math.max(420, Math.round(availH));
+    canvas.style.width = targetW + 'px';
+    canvas.style.height = targetH + 'px';
+    canvas.width = Math.round(targetW * dpr);
+    canvas.height = Math.round(targetH * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+/* ---------- SPATIAL GRID & POOLS ---------- */
+let cellCols = Math.ceil(worldWidth / GRID_SIZE);
+let cellRows = Math.ceil(worldHeight / GRID_SIZE);
+let grid = Array.from({length:cellCols*cellRows}, ()=>[]);
+
+// pooling for foods & pellets & fragments
+const foodPool = [];
+const pelletPool = [];
+const fragmentPool = [];
+
+function ensurePools(){
+    // foods pool (we'll fill exactly foodCount on init)
+    for(let i=0;i<foodCount;i++){
+        foodPool.push({type:'food', x:0,y:0,radius:5, _cell:-1});
+    }
+    // pellets small (for eject)
+    for(let i=0;i<200;i++) pelletPool.push({type:'pellet', x:0,y:0,radius:3, vx:0,vy:0, life:0, _cell:-1});
+    // fragments for split
+    for(let i=0;i<200;i++) fragmentPool.push({type:'frag', owner:null, x:0,y:0, radius:0, vx:0,vy:0, life:0, merging:false, _cell:-1});
+}
+
+function cellIndexFor(x,y){
+    const cx = clamp(Math.floor(x / GRID_SIZE), 0, cellCols-1);
+    const cy = clamp(Math.floor(y / GRID_SIZE), 0, cellRows-1);
+    return cy * cellCols + cx;
+}
+
+function addToCell(obj){
+    const idx = cellIndexFor(obj.x,obj.y);
+    obj._cell = idx;
+    grid[idx].push(obj);
+}
+function removeFromCell(obj){
+    const idx = obj._cell;
+    if(typeof idx !== 'number') return;
+    const arr = grid[idx];
+    const pos = arr.indexOf(obj);
+    if(pos >= 0) arr.splice(pos,1);
+    obj._cell = -1;
+}
+function moveToCell(obj, newX, newY){
+    // remove from old cell (fast-ish)
+    const old = obj._cell;
+    if(typeof old === 'number' && old >=0){
+        const arr = grid[old];
+        const p = arr.indexOf(obj);
+        if(p>=0) arr.splice(p,1);
+    }
+    obj.x = newX; obj.y = newY;
+    const idx = cellIndexFor(newX,newY);
+    obj._cell = idx;
+    grid[idx].push(obj);
+}
+
+/* ---------- ENTITIES ---------- */
+let foods = []; // references to foodPool entries currently active
+let pellets = []; // active pellets
+let fragments = []; // active split pieces
+
+// players (keep as simple single-entity plus fragments)
+function makePlayer(x,y,color){
+    return {
+        x,y,
+        radius:20,
+        baseSpeed:5,
+        boost:1, boostUntil:0,
+        flashUntil:0,
+        color,
+        score:0,
+        id: Math.random().toString(36).slice(2,9)
+    };
+}
+let player1 = makePlayer(worldWidth*0.25, worldHeight*0.5,'blue');
+let player2 = makePlayer(worldWidth*0.75, worldHeight*0.5,'red');
+
+/* ---------- INICIALIZÁLÁS ---------- */
+ensurePools();
+
+function initGrid(){
+    cellCols = Math.ceil(worldWidth / GRID_SIZE);
+    cellRows = Math.ceil(worldHeight / GRID_SIZE);
+    grid = Array.from({length:cellCols*cellRows}, ()=>[]);
+}
+
+function spawnFoods(count){
+    foods.length = 0;
+    for(let i=0;i<count;i++){
+        const f = foodPool[i];
         const r = 5;
-        return { x: r + Math.random()*(worldWidth - 2*r), y: r + Math.random()*(worldHeight - 2*r), radius: r, type:'food' };
+        const x = r + Math.random()*(worldWidth - 2*r);
+        const y = r + Math.random()*(worldHeight - 2*r);
+        f.x = x; f.y = y; f.radius = r; f.type='food';
+        addToCell(f);
+        foods.push(f);
     }
+}
 
-    // power-up spawn időzítés (világ-koordináták)
-    let speedBoost = null;
-    let spawnTimer = 0;
-    const spawnInterval = 4000; // ms
+/* ---------- POWER-UPS ---------- */
+const powerups = []; // active powerups in world
+const powerupPool = [];
+function initPowerupPool(){
+    for(let i=0;i<80;i++) powerupPool.push({type:'power', kind:'speed', x:0,y:0,radius:9,_cell:-1,life:0});
+}
+initPowerupPool();
+function spawnPowerup(){
+    if(Math.random() > 0.28) return;
+    const kinds = ['speed','shield','mass'];
+    const p = powerupPool.pop();
+    if(!p) return;
+    p.kind = kinds[int(Math.random()*kinds.length)];
+    p.radius = 9;
+    p.x = p.radius + Math.random()*(worldWidth - 2*p.radius);
+    p.y = p.radius + Math.random()*(worldHeight - 2*p.radius);
+    p.life = nowMs() + 30_000; // 30s on ground
+    p._cell = -1;
+    addToCell(p);
+    powerups.push(p);
+}
 
-    // játékidő ms-ben
-    let gameTimeMs = 600_000; // 600s
-    let startTime = performance.now();
-
-    // input (normalizált)
-    const keys = {};
-    document.addEventListener('keydown', e => {
-        const k = (e.key || '').toLowerCase();
-        if(e.key.startsWith('Arrow')) keys[e.key] = true;
-        else keys[k] = true;
-    });
-    document.addEventListener('keyup', e => {
-        const k = (e.key || '').toLowerCase();
-        if(e.key.startsWith('Arrow')) keys[e.key] = false;
-        else keys[k] = false;
-    });
-
-    // pause/reset
-    let paused = false;
-    pauseBtn.addEventListener('click', () => {
-        paused = !paused;
-        pauseBtn.textContent = paused ? 'Folytat' : 'Szünet';
-        if(!paused) lastTime = performance.now();
-    });
-    resetBtn.addEventListener('click', resetGame);
-
-    function resetGame(){
-        player1 = makePlayer(worldWidth * 0.25, worldHeight * 0.5);
-        player2 = makePlayer(worldWidth * 0.75, worldHeight * 0.5);
-        score1 = 0; score2 = 0;
-        for(let i=0;i<foods.length;i++){
-            const f = randomFood();
-            foods[i].x = f.x; foods[i].y = f.y; foods[i].radius = f.radius;
-        }
-        speedBoost = null;
-        spawnTimer = 0;
-        startTime = performance.now();
-        gameOver = false;
-        updateHUD();
-    }
-
-    function updateHUD(){
-        score1El.textContent = score1;
-        score2El.textContent = score2;
-    }
-
-    function effectiveSpeed(player){
-        const sizeFactor = Math.max(1, player.radius / 20);
-        return (player.baseSpeed / Math.sqrt(sizeFactor)) * player.boost;
-    }
-
-    function movePlayers(dt){
-        const moveAmount1 = effectiveSpeed(player1) * (dt/16.6667);
-        const moveAmount2 = effectiveSpeed(player2) * (dt/16.6667);
-
-        if(keys['w'] && player1.y - player1.radius > 0) player1.y -= moveAmount1;
-        if(keys['s'] && player1.y + player1.radius < worldHeight) player1.y += moveAmount1;
-        if(keys['a'] && player1.x - player1.radius > 0) player1.x -= moveAmount1;
-        if(keys['d'] && player1.x + player1.radius < worldWidth) player1.x += moveAmount1;
-
-        if(keys['ArrowUp'] && player2.y - player2.radius > 0) player2.y -= moveAmount2;
-        if(keys['ArrowDown'] && player2.y + player2.radius < worldHeight) player2.y += moveAmount2;
-        if(keys['ArrowLeft'] && player2.x - player2.radius > 0) player2.x -= moveAmount2;
-        if(keys['ArrowRight'] && player2.x + player2.radius < worldWidth) player2.x += moveAmount2;
-
-        // clamp world bounds (biztonság)
-        player1.x = clamp(player1.x, player1.radius, worldWidth - player1.radius);
-        player1.y = clamp(player1.y, player1.radius, worldHeight - player1.radius);
-        player2.x = clamp(player2.x, player2.radius, worldWidth - player2.radius);
-        player2.y = clamp(player2.y, player2.radius, worldHeight - player2.radius);
-
-        const now = performance.now();
-        if(player1.boostUntil > now){ player1.boost = 1.5; } else { player1.boost = 1; player1.boostUntil = 0; }
-        if(player2.boostUntil > now){ player2.boost = 1.5; } else { player2.boost = 1; player2.boostUntil = 0; }
-
-        if(player1.flashUntil <= now) player1.flashUntil = 0;
-        if(player2.flashUntil <= now) player2.flashUntil = 0;
-    }
-
-    function spawnSpeedBoost(dt){
-        spawnTimer += dt;
-        if(!speedBoost && spawnTimer >= spawnInterval){
-            if(Math.random() < 0.4){
-                const r = 8;
-                speedBoost = { x: r + Math.random()*(worldWidth - 2*r), y: r + Math.random()*(worldHeight - 2*r), radius: r, type:'speed' };
+/* ---------- UTIL: query nearby objects ---------- */
+function queryNearby(x,y,radius){
+    const minCx = clamp(Math.floor((x - radius) / GRID_SIZE), 0, cellCols-1);
+    const maxCx = clamp(Math.floor((x + radius) / GRID_SIZE), 0, cellCols-1);
+    const minCy = clamp(Math.floor((y - radius) / GRID_SIZE), 0, cellRows-1);
+    const maxCy = clamp(Math.floor((y + radius) / GRID_SIZE), 0, cellRows-1);
+    const res = [];
+    for(let cy=minCy; cy<=maxCy; cy++){
+        const base = cy * cellCols;
+        for(let cx=minCx; cx<=maxCx; cx++){
+            const cell = grid[base + cx];
+            if(cell && cell.length){
+                for(const o of cell) res.push(o);
             }
-            spawnTimer = 0;
+        }
+    }
+    return res;
+}
+
+/* ---------- INPUT ---------- */
+const keys = {};
+document.addEventListener('keydown', e=>{
+    const k = e.key;
+    if(k.startsWith('Arrow')) e.preventDefault();
+    if(k===' '){ e.preventDefault(); keys['space']=true; }
+    keys[k.toLowerCase()] = true;
+});
+document.addEventListener('keyup', e=>{
+    const k = e.key;
+    keys[k.toLowerCase()] = false;
+    if(k===' ') keys['space'] = false;
+});
+
+// fullscreen
+fullscreenBtn.addEventListener('click', ()=> {
+    if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+    else document.exitFullscreen();
+});
+
+// pause/reset
+let paused = false;
+pauseBtn.addEventListener('click', ()=>{ paused = !paused; pauseBtn.textContent = paused ? 'Folytat' : 'Szünet'; if(!paused) lastTime = nowMs(); });
+resetBtn.addEventListener('click', ()=>{ startGame(); });
+
+// HUD inputs
+foodCountInput.addEventListener('change', ()=>{ const v = parseInt(foodCountInput.value,10); if(v>0){ foodCount=v; startGame(); } });
+
+// overlay touch buttons
+splitBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); doSplit(player1); });
+ejectBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); doEject(player1); });
+
+// basic gamepad support (polling)
+let haveGamepad = false;
+window.addEventListener("gamepadconnected", ()=>{ haveGamepad = true; });
+window.addEventListener("gamepaddisconnected", ()=>{ haveGamepad = false; });
+
+/* ---------- TOUCH MOVE (simple) ---------- */
+let touchState = { active:false, tx:0, ty:0 };
+canvas.addEventListener('touchstart', (e)=>{
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    touchState.active = true;
+    touchState.tx = (t.clientX - rect.left) * (canvas.width / rect.width);
+    touchState.ty = (t.clientY - rect.top) * (canvas.height / rect.height);
+});
+canvas.addEventListener('touchmove', (e)=>{
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    touchState.tx = (t.clientX - rect.left) * (canvas.width / rect.width);
+    touchState.ty = (t.clientY - rect.top) * (canvas.height / rect.height);
+});
+canvas.addEventListener('touchend', (e)=>{ e.preventDefault(); touchState.active=false; });
+
+/* ---------- MOVEMENT & PHYSICS ---------- */
+function effectiveSpeed(player){
+    // nagyobb méretnél lassul: base / sqrt(sizeFactor) -> enyhítve log skálával
+    const sizeFactor = Math.max(1, player.radius / 20);
+    return (player.baseSpeed / Math.sqrt(sizeFactor)) * player.boost;
+}
+
+/* ---------- GAME MECHANICS: split / eject / growth ---------- */
+function doSplit(player){
+    if(player.radius < 28) return;
+    // take half radius for fragment
+    const fragR = Math.max(8, Math.floor(player.radius/2));
+    player.radius = Math.max(MIN_PLAYER_RADIUS, player.radius - fragR);
+    // get fragment from pool
+    const frag = fragmentPool.pop();
+    if(!frag) return;
+    frag.owner = player;
+    frag.radius = fragR;
+    frag.x = player.x + fragR + 2;
+    frag.y = player.y;
+    // direction - player's facing approximated from keys or towards mouse (we'll use last input vector)
+    const dir = getInputDirection(player === player1 ? 1 : 2);
+    const mag = Math.hypot(dir.x, dir.y) || 1;
+    frag.vx = (dir.x / mag) * (8 + fragR/6);
+    frag.vy = (dir.y / mag) * (8 + fragR/6);
+    frag.life = nowMs() + 6000; // 6s active before can merge
+    frag.merging = false;
+    fragments.push(frag);
+    addToCell(frag);
+}
+
+function doEject(player){
+    if(player.radius < 16) return;
+    const amt = Math.max(2, Math.floor(player.radius*0.06));
+    player.radius = Math.max(MIN_PLAYER_RADIUS, player.radius - amt);
+    const p = pelletPool.pop();
+    if(!p) return;
+    p.radius = 3;
+    p.x = player.x + (player.radius + 8);
+    p.y = player.y;
+    const dir = getInputDirection(player === player1 ? 1 : 2);
+    const mag = Math.hypot(dir.x, dir.y) || 1;
+    p.vx = (dir.x / mag) * 6;
+    p.vy = (dir.y / mag) * 6;
+    p.life = nowMs() + 4000;
+    pellets.push(p);
+    addToCell(p);
+}
+
+/* ---------- INPUT DIRECTION helper ---------- */
+// playerIndex 1 or 2
+function getInputDirection(playerIdx){
+    if(playerIdx===1){
+        // WASD or touch
+        let dx=0,dy=0;
+        if(keys['w']) dy -= 1;
+        if(keys['s']) dy += 1;
+        if(keys['a']) dx -= 1;
+        if(keys['d']) dx += 1;
+        if(touchState.active){
+            // convert touch pos to world coords and aim
+            const rect = canvas.getBoundingClientRect();
+            const tx = (touchState.tx / (canvas.width)) * (canvas.width); // already in canvas pixels
+            const ty = (touchState.ty / (canvas.height)) * (canvas.height);
+            // convert to world coords via camera
+            const worldX = camX + tx * (1); const worldY = camY + ty * (1);
+            dx = worldX - player1.x; dy = worldY - player1.y;
+        }
+        // gamepad override
+        if(haveGamepad){
+            const gp = navigator.getGamepads()[0];
+            if(gp){
+                const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+                if(Math.abs(ax) > 0.12 || Math.abs(ay) > 0.12){ dx = ax; dy = ay; }
+            }
+        }
+        return {x:dx,y:dy};
+    } else {
+        let dx=0,dy=0;
+        if(keys['arrowup']) dy -= 1;
+        if(keys['arrowdown']) dy += 1;
+        if(keys['arrowleft']) dx -= 1;
+        if(keys['arrowright']) dx += 1;
+        // 2nd gamepad support
+        if(haveGamepad){
+            const gp = navigator.getGamepads()[1] || navigator.getGamepads()[0];
+            if(gp){
+                const ax = gp.axes[2] || 0, ay = gp.axes[3] || 0;
+                if(Math.abs(ax) > 0.12 || Math.abs(ay) > 0.12){ dx = ax; dy = ay; }
+            }
+        }
+        return {x:dx,y:dy};
+    }
+}
+
+/* ---------- COLLISIONS / UPDATES ---------- */
+function updateEntities(dt){
+    // move pellets
+    for(let i=pellets.length-1;i>=0;i--){
+        const p = pellets[i];
+        if(!p) continue;
+        // simple Euler
+        p.x += p.vx * (dt/16.6667);
+        p.y += p.vy * (dt/16.6667);
+        // update cell
+        const idx = cellIndexFor(p.x,p.y);
+        if(idx !== p._cell){
+            removeFromCell(p);
+            addToCell(p);
+        }
+        if(nowMs() > p.life){
+            // remove to pool
+            removeFromCell(p);
+            pelletPool.push(p);
+            pellets.splice(i,1);
         }
     }
 
-    function checkCollisions(){
-        for(let i=0;i<foods.length;i++){
-            const f = foods[i];
-            const d1 = Math.hypot(player1.x - f.x, player1.y - f.y);
-            if(d1 < player1.radius + f.radius){
-                score1++;
-                player1.radius = Math.min(120, player1.radius + 1);
-                foods[i] = randomFood();
+    // move fragments
+    for(let i=fragments.length-1;i>=0;i--){
+        const f = fragments[i];
+        f.x += f.vx * (dt/16.6667);
+        f.y += f.vy * (dt/16.6667);
+        // damping
+        f.vx *= 0.995; f.vy *= 0.995;
+        const idx = cellIndexFor(f.x,f.y);
+        if(idx !== f._cell){ removeFromCell(f); addToCell(f); }
+        // life check -> allow merging after life expired
+        if(nowMs() > f.life) f.merging = true;
+        // if merging and close to owner -> merge
+        if(f.merging && f.owner){
+            const d2 = dist2(f.x,f.y,f.owner.x,f.owner.y);
+            if(d2 < (f.radius + f.owner.radius + 6) ** 2){
+                // merge sizes
+                f.owner.radius = Math.min(MAX_PLAYER_RADIUS, Math.sqrt(f.owner.radius*f.owner.radius + f.radius*f.radius));
+                removeFromCell(f);
+                fragmentPool.push(f);
+                fragments.splice(i,1);
                 continue;
             }
-            const d2 = Math.hypot(player2.x - f.x, player2.y - f.y);
-            if(d2 < player2.radius + f.radius){
-                score2++;
-                player2.radius = Math.min(120, player2.radius + 1);
-                foods[i] = randomFood();
-            }
         }
+        // if out of world -> recycle
+        if(f.x < -100 || f.x > worldWidth+100 || f.y < -100 || f.y > worldHeight+100){
+            removeFromCell(f);
+            fragmentPool.push(f);
+            fragments.splice(i,1);
+        }
+    }
 
-        if(speedBoost){
-            const now = performance.now();
-            const d1 = Math.hypot(player1.x - speedBoost.x, player1.y - speedBoost.y);
-            if(d1 < player1.radius + speedBoost.radius){
-                player1.boostUntil = now + 5000;
-                speedBoost = null;
-            } else {
-                const d2 = Math.hypot(player2.x - speedBoost.x, player2.y - speedBoost.y);
-                if(d2 < player2.radius + speedBoost.radius){
-                    player2.boostUntil = now + 5000;
-                    speedBoost = null;
+    // power-ups lifetime
+    for(let i=powerups.length-1;i>=0;i--){
+        const p = powerups[i];
+        if(nowMs() > p.life){
+            removeFromCell(p);
+            powerupPool.push(p);
+            powerups.splice(i,1);
+        }
+    }
+}
+
+/* ---------- COLLISION CHECKS (optimized) ---------- */
+function checkCollisions(){
+    // players collect foods/powerups/pellets/fragments interactions
+    handlePlayerPickup(player1);
+    handlePlayerPickup(player2);
+
+    // fragments and pellets can be eaten by players/fragments
+    for(const frag of fragments){
+        // fragments can eat foods and pellets
+        const near = queryNearby(frag.x, frag.y, frag.radius + 8);
+        for(const o of near){
+            if(o.type === 'food'){
+                const rsum = frag.radius + o.radius;
+                if(dist2(frag.x,frag.y,o.x,o.y) < rsum*rsum){
+                    // grow fragment a bit
+                    frag.radius = Math.min(MAX_PLAYER_RADIUS, frag.radius + 0.7);
+                    // respawn food: move to new position
+                    moveToRandomFood(o);
+                }
+            } else if(o.type === 'pellet'){
+                // absorb pellet
+                const rsum = frag.radius + o.radius;
+                if(dist2(frag.x,frag.y,o.x,o.y) < rsum*rsum){
+                    frag.radius = Math.min(MAX_PLAYER_RADIUS, frag.radius + 0.6);
+                    // remove pellet
+                    removeFromCell(o);
+                    const idx = pellets.indexOf(o);
+                    if(idx>=0) pellets.splice(idx,1);
+                    pelletPool.push(o);
+                }
+            } else if(o.type === 'power'){
+                const rsum = frag.radius + o.radius;
+                if(dist2(frag.x,frag.y,o.x,o.y) < rsum*rsum){
+                    // small effect: mass
+                    frag.radius = Math.min(MAX_PLAYER_RADIUS, frag.radius + 3);
+                    removeFromCell(o);
+                    powerupPool.push(o);
+                    const pi = powerups.indexOf(o);
+                    if(pi>=0) powerups.splice(pi,1);
                 }
             }
         }
+    }
 
-        const dx = player2.x - player1.x;
-        const dy = player2.y - player1.y;
-        const distPlayers = Math.hypot(dx, dy);
-
-        if(distPlayers > 0 && distPlayers < player1.radius + player2.radius){
-            if(player1.radius > player2.radius + 5){
-                player1.radius = Math.min(120, player1.radius + Math.floor(player2.radius/2));
-                score1 += 5;
-                player1.flashUntil = performance.now() + 500;
-                player2 = makePlayer(worldWidth * 0.75, worldHeight * 0.5);
-                score2 = Math.max(0, score2 - 5);
-            } else if(player2.radius > player1.radius + 5){
-                player2.radius = Math.min(120, player2.radius + Math.floor(player1.radius/2));
-                score2 += 5;
-                player2.flashUntil = performance.now() + 500;
-                player1 = makePlayer(worldWidth * 0.25, worldHeight * 0.5);
-                score1 = Math.max(0, score1 - 5);
-            } else {
-                const overlap = (player1.radius + player2.radius) - distPlayers;
-                const nx = dx / distPlayers;
-                const ny = dy / distPlayers;
-                player1.x -= nx * overlap * 0.5;
-                player1.y -= ny * overlap * 0.5;
-                player2.x += nx * overlap * 0.5;
-                player2.y += ny * overlap * 0.5;
-            }
-        } else if(distPlayers === 0){
-            player1.x = clamp(player1.x - 1, player1.radius, worldWidth - player1.radius);
-            player2.x = clamp(player2.x + 1, player2.radius, worldWidth - player2.radius);
+    // pellets collision with players
+    for(let i=pellets.length-1;i>=0;i--){
+        const p = pellets[i];
+        // player1
+        const rsum1 = player1.radius + p.radius;
+        if(dist2(player1.x,player1.y,p.x,p.y) < rsum1*rsum1){
+            player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + p.radius*0.6);
+            removeFromCell(p);
+            pelletPool.push(p);
+            pellets.splice(i,1);
+            continue;
+        }
+        // player2
+        const rsum2 = player2.radius + p.radius;
+        if(dist2(player2.x,player2.y,p.x,p.y) < rsum2*rsum2){
+            player2.radius = Math.min(MAX_PLAYER_RADIUS, player2.radius + p.radius*0.6);
+            removeFromCell(p);
+            pelletPool.push(p);
+            pellets.splice(i,1);
+            continue;
         }
     }
 
-    // Kamera — MOST: mindig a PLAYER1 köré helyezzük (fix középpont)
-    let camX = 0, camY = 0;
-    function updateCamera(dt){
-        // player1-et középre tesszük:
-        const tx = player1.x - canvas.width / 2;
-        const ty = player1.y - canvas.height / 2;
-
-        // clamp, hogy ne lássunk a világon kívülre (ha azt akarod, hogy mindig középen legyen, akár törölheted a clamp-et)
-        const maxCamX = Math.max(0, worldWidth - canvas.width);
-        const maxCamY = Math.max(0, worldHeight - canvas.height);
-        // Ha szigorúan középre akarod a játékost még a széleken is -> töröld a két clamp sort alul.
-        camX = clamp(tx, 0, maxCamX);
-        camY = clamp(ty, 0, maxCamY);
-    }
-
-    function draw(remainingMs){
-        ctx.fillStyle = '#111';
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-
-        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-        const grid = 50;
-        const startX = Math.floor(camX / grid) * grid;
-        const endX = camX + canvas.width;
-        for(let x = startX; x <= endX; x += grid){
-            const sx = Math.round(x - camX);
-            ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,canvas.height); ctx.stroke();
-        }
-        const startY = Math.floor(camY / grid) * grid;
-        const endY = camY + canvas.height;
-        for(let y = startY; y <= endY; y += grid){
-            const sy = Math.round(y - camY);
-            ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(canvas.width,sy); ctx.stroke();
-        }
-
-        // ételek
-        ctx.fillStyle = 'yellow';
-        for(const f of foods){
-            const sx = f.x - camX;
-            const sy = f.y - camY;
-            if(sx + f.radius < 0 || sx - f.radius > canvas.width || sy + f.radius < 0 || sy - f.radius > canvas.height) continue;
-            ctx.beginPath(); ctx.arc(sx, sy, f.radius, 0, Math.PI*2); ctx.fill();
-        }
-
-        // speed boost
-        if(speedBoost){
-            const sx = speedBoost.x - camX;
-            const sy = speedBoost.y - camY;
-            if(!(sx + speedBoost.radius < 0 || sx - speedBoost.radius > canvas.width || sy + speedBoost.radius < 0 || sy - speedBoost.radius > canvas.height)){
-                ctx.fillStyle = 'green';
-                ctx.beginPath(); ctx.arc(sx, sy, speedBoost.radius, 0, Math.PI*2); ctx.fill();
-                ctx.fillStyle = 'white'; ctx.font = '10px Arial';
-                ctx.fillText('↗', Math.round(sx)-4, Math.round(sy)+3);
+    // players collide with foods and powerups (optimized: queryNearby)
+    function playerFoodAndPower(player){
+        const q = queryNearby(player.x, player.y, player.radius + 8);
+        for(const o of q){
+            if(o.type === 'food'){
+                const rsum = player.radius + o.radius;
+                if(dist2(player.x,player.y,o.x,o.y) < rsum*rsum){
+                    // grow with diminishing returns at big size
+                    const grow = Math.max(0.5, 2 * (20 / Math.max(20, player.radius)));
+                    player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + grow);
+                    player.score++;
+                    moveToRandomFood(o);
+                }
+            } else if(o.type === 'power'){
+                const rsum = player.radius + o.radius;
+                if(dist2(player.x,player.y,o.x,o.y) < rsum*rsum){
+                    applyPowerupToPlayer(player, o);
+                    removeFromCell(o);
+                    const idx = powerups.indexOf(o);
+                    if(idx>=0) powerups.splice(idx,1);
+                    powerupPool.push(o);
+                }
             }
         }
-
-        // játékosok (kamera transzformálva)
-        const now = performance.now();
-        const p1sx = player1.x - camX;
-        const p1sy = player1.y - camY;
-        ctx.fillStyle = (player1.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'blue') : 'blue');
-        ctx.beginPath(); ctx.arc(p1sx, p1sy, player1.radius, 0, Math.PI*2); ctx.fill();
-
-        const p2sx = player2.x - camX;
-        const p2sy = player2.y - camY;
-        ctx.fillStyle = (player2.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'red') : 'red');
-        ctx.beginPath(); ctx.arc(p2sx, p2sy, player2.radius, 0, Math.PI*2); ctx.fill();
-
-        // HUD
-        ctx.fillStyle = 'white';
-        ctx.font = '18px Arial';
-        ctx.fillText(`J1: ${score1}`, 10, 22);
-        ctx.fillText(`J2: ${score2}`, canvas.width - 80, 22);
-
-        const remainingSec = Math.max(0, (remainingMs / 1000)).toFixed(1);
-        ctx.fillText(`Idő: ${remainingSec}s`, canvas.width/2 - 40, 22);
     }
+    playerFoodAndPower(player1);
+    playerFoodAndPower(player2);
 
-    // fő loop
-    let lastTime = performance.now();
-    let gameOver = false;
-    function loop(now){
-        if(paused){ lastTime = now; requestAnimationFrame(loop); return; }
-        const dt = now - lastTime;
-        lastTime = now;
-
-        if(gameOver){ requestAnimationFrame(loop); return; }
-
-        const elapsed = now - startTime;
-        const remainingMs = Math.max(0, gameTimeMs - elapsed);
-
-        movePlayers(dt);
-        spawnSpeedBoost(dt);
-        checkCollisions();
-        updateCamera(dt); // most a player1-re fókuszál
-        draw(remainingMs);
-        updateHUD();
-
-        if(remainingMs <= 0 && !gameOver){
-            gameOver = true;
-            const winner = score1 > score2 ? 'Játékos 1' : score2 > score1 ? 'Játékos 2' : 'Döntetlen';
-            setTimeout(()=>{
-                alert(`Játék vége! ${winner} nyert! J1: ${score1}, J2: ${score2}`);
-            }, 10);
+    // player-player collisions (eating)
+    const dx = player2.x - player1.x, dy = player2.y - player1.y;
+    const d2 = dx*dx + dy*dy;
+    const rsum = player1.radius + player2.radius;
+    if(d2 > 0 && d2 < rsum*rsum){
+        const dist = Math.sqrt(d2);
+        if(player1.radius > player2.radius + 6){
+            // p1 eats p2
+            player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + Math.floor(player2.radius*0.6));
+            player1.score += 10;
+            // reset player2
+            resetPlayerTo(player2, worldWidth*0.75, worldHeight*0.5);
+        } else if(player2.radius > player1.radius + 6){
+            player2.radius = Math.min(MAX_PLAYER_RADIUS, player2.radius + Math.floor(player1.radius*0.6));
+            player2.score += 10;
+            resetPlayerTo(player1, worldWidth*0.25, worldHeight*0.5);
         } else {
-            requestAnimationFrame(loop);
+            // bounce overlap
+            const overlap = (rsum - dist);
+            const nx = dx / dist, ny = dy / dist;
+            player1.x -= nx * overlap * 0.5;
+            player1.y -= ny * overlap * 0.5;
+            player2.x += nx * overlap * 0.5;
+            player2.y += ny * overlap * 0.5;
         }
     }
+}
 
-    // indítás
-    resetGame();
+function handlePlayerPickup(player){
+    // merged in checkCollisions via helper
+}
+
+/* ---------- POWERUP EFFECTS ---------- */
+function applyPowerupToPlayer(player, powerObj){
+    if(powerObj.kind === 'speed'){
+        player.boostUntil = nowMs() + 5000;
+        player.boost = 1.6;
+    } else if(powerObj.kind === 'shield'){
+        // simple flash effect representing shield (we won't implement full invulnerability)
+        player.flashUntil = nowMs() + 2000;
+    } else if(powerObj.kind === 'mass'){
+        player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + 6);
+    }
+}
+
+/* ---------- helper respawn food ---------- */
+function moveToRandomFood(foodObj){
+    // just reposition and move cell
+    const r = 5;
+    const nx = r + Math.random()*(worldWidth - 2*r);
+    const ny = r + Math.random()*(worldHeight - 2*r);
+    moveToCell(foodObj, nx, ny);
+}
+
+/* ---------- CAMERA ---------- */
+let camX = 0, camY = 0;
+const CAMERA_LERP = 0.16;
+function updateCamera(dt){
+    const tx = player1.x - canvas.width/2;
+    const ty = player1.y - canvas.height/2;
+    const maxCamX = Math.max(0, worldWidth - canvas.width);
+    const maxCamY = Math.max(0, worldHeight - canvas.height);
+    const cx = clamp(tx, 0, maxCamX);
+    const cy = clamp(ty, 0, maxCamY);
+    camX += (cx - camX) * CAMERA_LERP;
+    camY += (cy - camY) * CAMERA_LERP;
+}
+
+/* ---------- DRAW ---------- */
+function draw(remainingMs){
+    ctx.fillStyle = '#0d0d0d';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // grid lines subtle
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    const gridSize = 60;
+    const startX = Math.floor(camX / gridSize) * gridSize;
+    const endX = camX + canvas.width;
+    for(let x=startX;x<=endX;x+=gridSize){
+        const sx = Math.round(x - camX);
+        ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,canvas.height); ctx.stroke();
+    }
+    const startY = Math.floor(camY / gridSize) * gridSize;
+    const endY = camY + canvas.height;
+    for(let y=startY;y<=endY;y+=gridSize){
+        const sy = Math.round(y - camY);
+        ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(canvas.width,sy); ctx.stroke();
+    }
+
+    // draw foods (only on-screen)
+    ctx.fillStyle = 'gold';
+    for(const f of foods){
+        const sx = f.x - camX;
+        const sy = f.y - camY;
+        if(sx + f.radius < 0 || sx - f.radius > canvas.width || sy + f.radius < 0 || sy - f.radius > canvas.height) continue;
+        ctx.beginPath(); ctx.arc(sx,sy,f.radius,0,Math.PI*2); ctx.fill();
+    }
+
+    // powerups
+    for(const p of powerups){
+        const sx = p.x - camX, sy = p.y - camY;
+        if(sx + p.radius < 0 || sx - p.radius > canvas.width || sy + p.radius < 0 || sy - p.radius > canvas.height) continue;
+        ctx.beginPath();
+        if(p.kind==='speed') ctx.fillStyle = '#3af';
+        else if(p.kind==='shield') ctx.fillStyle = '#ffb';
+        else ctx.fillStyle = '#9f3';
+        ctx.arc(sx,sy,p.radius,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='black'; ctx.font='10px Arial'; ctx.fillText(p.kind[0].toUpperCase(), sx-4, sy+3);
+    }
+
+    // pellets
+    ctx.fillStyle = '#ccc';
+    for(const p of pellets){
+        const sx = p.x - camX, sy = p.y - camY;
+        if(sx + p.radius < 0 || sx - p.radius > canvas.width || sy + p.radius < 0 || sy - p.radius > canvas.height) continue;
+        ctx.beginPath(); ctx.arc(sx,sy,p.radius,0,Math.PI*2); ctx.fill();
+    }
+
+    // fragments
+    for(const f of fragments){
+        const sx = f.x - camX, sy = f.y - camY;
+        if(sx + f.radius < 0 || sx - f.radius > canvas.width || sy + f.radius < 0 || sy - f.radius > canvas.height) continue;
+        ctx.beginPath();
+        ctx.fillStyle = f.owner===player1 ? 'rgba(120,170,255,0.95)' : 'rgba(255,140,140,0.95)';
+        ctx.arc(sx,sy,f.radius,0,Math.PI*2); ctx.fill();
+    }
+
+    // players
+    const now = nowMs();
+    // player1
+    const p1sx = player1.x - camX, p1sy = player1.y - camY;
+    ctx.beginPath();
+    ctx.fillStyle = (player1.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'blue') : 'blue');
+    ctx.arc(p1sx,p1sy,player1.radius,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='white'; ctx.font='12px Arial'; ctx.fillText('J1', p1sx-8, p1sy+4);
+
+    // player2
+    const p2sx = player2.x - camX, p2sy = player2.y - camY;
+    ctx.beginPath();
+    ctx.fillStyle = (player2.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'red') : 'red');
+    ctx.arc(p2sx,p2sy,player2.radius,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='white'; ctx.font='12px Arial'; ctx.fillText('J2', p2sx-8, p2sy+4);
+
+    // HUD overlay on canvas
+    ctx.fillStyle='white'; ctx.font='16px Arial';
+    ctx.fillText(`J1: ${player1.score}`, 10, 22);
+    ctx.fillText(`J2: ${player2.score}`, canvas.width - 110, 22);
+    const remainingSec = Math.max(0, (gameTimeMs - (now - startTime))/1000).toFixed(1);
+    ctx.fillText(`Idő: ${remainingSec}s`, canvas.width/2 - 40, 22);
+}
+
+/* ---------- MINIMAP ---------- */
+function drawMinimap(){
+    const mm = minimapEl;
+    const mmW = mm.clientWidth, mmH = mm.clientHeight;
+    const mmCtx = mm._ctx || (mm._ctx = document.createElement('canvas').getContext('2d'));
+    // create internal canvas same size
+    if(!mm._canvas){ mm._canvas = document.createElement('canvas'); mm._canvas.width = mmW; mm._canvas.height = mmH; mm._ctx = mm._canvas.getContext('2d'); }
+    const c = mm._ctx;
+    mm._canvas.width = mmW; mm._canvas.height = mmH;
+    // background
+    c.fillStyle = 'rgba(10,10,10,0.9)'; c.fillRect(0,0,mmW,mmH);
+    // scale
+    const sx = mmW / worldWidth, sy = mmH / worldHeight;
+    // foods (sample some for speed)
+    c.fillStyle = 'gold';
+    const sample = 200;
+    for(let i=0;i<sample && i<foods.length;i++){
+        const f = foods[i* Math.floor(Math.max(1, foods.length/sample))];
+        c.fillRect(f.x * sx, f.y * sy, 1,1);
+    }
+    // powerups
+    for(const p of powerups){ c.fillStyle = p.kind==='speed' ? '#3af' : p.kind==='shield' ? '#ffb' : '#9f3'; c.fillRect(p.x * sx, p.y * sy, 3,3); }
+    // players
+    c.fillStyle='blue'; c.beginPath(); c.arc(player1.x * sx, player1.y * sy, Math.max(2, player1.radius*sx), 0, Math.PI*2); c.fill();
+    c.fillStyle='red'; c.beginPath(); c.arc(player2.x * sx, player2.y * sy, Math.max(2, player2.radius*sy), 0, Math.PI*2); c.fill();
+    // camera rect
+    c.strokeStyle='rgba(255,255,255,0.5)'; c.strokeRect(camX*sx, camY*sy, canvas.width*sx, canvas.height*sy);
+    // render to DOM element background
+    mm.style.backgroundImage = `url(${mm._canvas.toDataURL()})`;
+}
+
+/* ---------- SCOREBOARD ---------- */
+function updateScoreboard(){
+    const items = [
+        {name:'J1', score:player1.score, size: int(player1.radius)},
+        {name:'J2', score:player2.score, size: int(player2.radius)}
+    ];
+    items.sort((a,b)=>b.size - a.size);
+    sbEl.innerHTML = 'Top:<br>' + items.map(it=>`${it.name} — méret: ${it.size} / pont: ${it.score}`).join('<br>');
+    score1El.textContent = player1.score;
+    score2El.textContent = player2.score;
+}
+
+/* ---------- CAMERA FOLLOW & GAME TIMER ---------- */
+let gameTimeMs = 420_000; // 7 perc
+let startTime = nowMs();
+
+/* ---------- MAIN LOOP ---------- */
+let lastTime = nowMs();
+function loop(ts){
+    if(paused){ lastTime = ts; requestAnimationFrame(loop); return; }
+    const dt = ts - lastTime; lastTime = ts;
+
+    // input: movement for players
+    applyInputs(dt);
+
+    // update entities physics
+    updateEntities(dt);
+
+    // spawn powerups occasionally
+    if(Math.random() < 0.0025) spawnPowerup(); // rate tuned
+
+    // collisions & pickups
+    checkCollisions();
+
+    // camera
+    updateCamera(dt);
+
+    // draw
+    const elapsed = nowMs() - startTime;
+    const remainingMs = Math.max(0, gameTimeMs - elapsed);
+    draw(remainingMs);
+    drawMinimap();
+    updateScoreboard();
+
+    // check end
+    if(remainingMs <= 0){
+        paused = true;
+        setTimeout(()=> alert(`Játék vége! J1: ${player1.score}, J2: ${player2.score}`), 20);
+        return;
+    }
     requestAnimationFrame(loop);
-    </script>
+}
+
+/* ---------- INPUT APPLICATION ---------- */
+function applyInputs(dt){
+    // player1
+    const dir1 = getInputDirection(1);
+    const mag1 = Math.hypot(dir1.x, dir1.y);
+    if(mag1 > 0){
+        const speed = effectiveSpeed(player1);
+        player1.x += (dir1.x/mag1) * speed * (dt/16.6667);
+        player1.y += (dir1.y/mag1) * speed * (dt/16.6667);
+    }
+    // player2
+    const dir2 = getInputDirection(2);
+    const mag2 = Math.hypot(dir2.x, dir2.y);
+    if(mag2 > 0){
+        const speed = effectiveSpeed(player2);
+        player2.x += (dir2.x/mag2) * speed * (dt/16.6667);
+        player2.y += (dir2.y/mag2) * speed * (dt/16.6667);
+    }
+
+    // clamp players in world
+    player1.x = clamp(player1.x, player1.radius, worldWidth - player1.radius);
+    player1.y = clamp(player1.y, player1.radius, worldHeight - player1.radius);
+    player2.x = clamp(player2.x, player2.radius, worldWidth - player2.radius);
+    player2.y = clamp(player2.y, player2.radius, worldHeight - player2.radius);
+
+    // boosts expire
+    const now = nowMs();
+    if(player1.boostUntil < now) { player1.boost = 1; player1.boostUntil = 0; }
+    if(player2.boostUntil < now) { player2.boost = 1; player2.boostUntil = 0; }
+
+    // actions: split/eject
+    // player1: space -> split, q -> eject
+    if(keys['space']){ keys['space'] = false; doSplit(player1); }
+    if(keys['q']){ keys['q'] = false; doEject(player1); }
+
+    // player2: enter -> split, shift -> eject (Right Shift)
+    if(keys['enter']){ keys['enter'] = false; doSplit(player2); }
+    if(keys['shift'] || keys['rshift'] || keys['shiftright']){ if(keys['shift']){ keys['shift']=false; doEject(player2); } }
+
+    // gamepad buttons for split/eject (poll)
+    if(haveGamepad){
+        const gp = navigator.getGamepads()[0];
+        if(gp){
+            if(gp.buttons[0] && gp.buttons[0].pressed) { doSplit(player1); } // A
+            if(gp.buttons[1] && gp.buttons[1].pressed) { doEject(player1); } // B
+        }
+    }
+}
+
+/* ---------- RESET & START ---------- */
+function resetPlayerTo(player, x, y){
+    player.x = x; player.y = y; player.radius = 20; player.score = Math.max(0, player.score-3);
+}
+
+function startGame(){
+    // reset world/grid
+    initGrid();
+    // ensure pool sizes
+    if(foodPool.length < foodCount) {
+        const need = foodCount - foodPool.length;
+        for(let i=0;i<need;i++) foodPool.push({type:'food', x:0,y:0,radius:5,_cell:-1});
+    }
+    spawnFoods(foodCount);
+    // clear pellets/frags/powerups pools/mappings
+    for(const p of pellets){ if(p._cell>=0) removeFromCell(p); pelletPool.push(p); }
+    pellets.length=0;
+    for(const f of fragments){ if(f._cell>=0) removeFromCell(f); fragmentPool.push(f); }
+    fragments.length=0;
+    for(const p of powerups){ if(p._cell>=0) removeFromCell(p); powerupPool.push(p); }
+    powerups.length=0;
+    // reset players
+    player1 = makePlayer(worldWidth*0.25, worldHeight*0.5,'blue');
+    player2 = makePlayer(worldWidth*0.75, worldHeight*0.5,'red');
+    player1.score = 0; player2.score = 0;
+    startTime = nowMs();
+    paused = false;
+    lastTime = nowMs();
+    requestAnimationFrame(loop);
+}
+
+startGame();
+
+/* ---------- DEBUG shortcuts ---------- */
+window.addEventListener('keydown',(e)=>{
+    if(e.key === 'p'){ paused = !paused; }
+    if(e.key === 'g'){ GRID_SIZE = Math.max(80, GRID_SIZE - 20); initGrid(); spawnFoods(foodCount); }
+    if(e.key === 'h'){ GRID_SIZE = GRID_SIZE + 20; initGrid(); spawnFoods(foodCount); }
+});
+</script>
 </body>
 </html>
