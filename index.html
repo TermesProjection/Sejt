@@ -66,7 +66,6 @@ const ctx = canvas.getContext('2d');
 const minimapEl = document.getElementById('minimap');
 const sbEl = document.getElementById('scoreboardEl');
 const score1El = document.getElementById('score1');
-const score2El = document.getElementById('score2');
 const pauseBtn = document.getElementById('pauseBtn');
 const resetBtn = document.getElementById('resetBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
@@ -78,7 +77,7 @@ let worldWidth = 50000, worldHeight = 50000;
 let foodCount = parseInt(foodCountInput.value,10) || 8000;
 let GRID_SIZE = 220;
 
-const MAX_PLAYER_RADIUS = 180;
+const MAX_PLAYER_RADIUS = 380;
 const MIN_PLAYER_RADIUS = 12;
 const NPC_COUNT = 15; // NPC ellenségek száma
 
@@ -127,13 +126,26 @@ function ensurePools(){
 }
 
 function cellIndexFor(x,y){
-    const cx = clamp(Math.floor(x / GRID_SIZE), 0, cellCols-1);
-    const cy = clamp(Math.floor(y / GRID_SIZE), 0, cellRows-1);
-    return cy * cellCols + cx;
+    if (isNaN(x) || isNaN(y)) {
+        console.error('Invalid coordinates for cellIndexFor:', { x, y });
+        return 0;
+    }
+    const cx = clamp(Math.floor(x / GRID_SIZE), 0, cellCols - 1);
+    const cy = clamp(Math.floor(y / GRID_SIZE), 0, cellRows - 1);
+    const idx = cy * cellCols + cx;
+    if (idx < 0 || idx >= grid.length) {
+        console.error('Invalid grid index:', { idx, x, y, cellCols, cellRows });
+        return 0;
+    }
+    return idx;
 }
 
 function addToCell(obj){
     const idx = cellIndexFor(obj.x,obj.y);
+    if (!grid || !grid[idx]) {
+        console.error('Grid cell is undefined:', { idx, gridLength: grid?.length });
+        return;
+    }
     obj._cell = idx;
     grid[idx].push(obj);
 }
@@ -184,10 +196,10 @@ function makeNPC(){
     const colors = ['#8f4', '#f84', '#48f', '#f8f', '#8ff', '#ff8'];
     const x = Math.random() * worldWidth;
     const y = Math.random() * worldHeight;
-    return {
+    const npc = {
         x, y,
         radius: 15 + Math.random() * 15,
-        baseSpeed: 4 + Math.random(),
+        baseSpeed: 2 + Math.random() * 1, // Csökkentett sebesség: 2 és 3 között
         targetX: x,
         targetY: y,
         targetChangeTime: 0,
@@ -195,10 +207,17 @@ function makeNPC(){
         score: 0,
         id: 'npc_' + Math.random().toString(36).slice(2,7)
     };
+    if (isNaN(npc.x) || isNaN(npc.y)) {
+        console.error('Érvénytelen NPC koordináták inicializáláskor:', npc);
+        npc.x = worldWidth / 2;
+        npc.y = worldHeight / 2;
+        npc.targetX = npc.x;
+        npc.targetY = npc.y;
+    }
+    return npc;
 }
 
 let player1 = makePlayer(worldWidth*0.25, worldHeight*0.5,'blue');
-let player2 = makePlayer(worldWidth*0.75, worldHeight*0.5,'red');
 
 /* ---------- INICIALIZÁLÁS ---------- */
 ensurePools();
@@ -206,7 +225,13 @@ ensurePools();
 function initGrid(){
     cellCols = Math.ceil(worldWidth / GRID_SIZE);
     cellRows = Math.ceil(worldHeight / GRID_SIZE);
-    grid = Array.from({length:cellCols*cellRows}, ()=>[]);
+    if (cellCols <= 0 || cellRows <= 0 || isNaN(cellCols) || isNaN(cellRows)) {
+        console.error('Invalid grid dimensions:', { cellCols, cellRows, worldWidth, worldHeight, GRID_SIZE });
+        cellCols = Math.max(1, cellCols);
+        cellRows = Math.max(1, cellRows);
+    }
+    grid = Array.from({length: cellCols * cellRows}, () => []);
+    console.log('Grid initialized:', { cellCols, cellRows, gridLength: grid.length });
 }
 
 function spawnFoods(count){
@@ -227,8 +252,12 @@ function initNPCs(){
     npcs = [];
     for(let i=0; i<NPC_COUNT; i++){
         const npc = makeNPC();
+        npc._cell = -1; // Initialize _cell
+        addToCell(npc); // Add to grid
         npcs.push(npc);
+        console.log('NPC létrehozva:', npc);
     }
+    console.log('Összes NPC:', npcs.length);
 }
 
 /* ---------- POWER-UPS ---------- */
@@ -329,10 +358,14 @@ canvas.addEventListener('touchmove', (e)=>{
 canvas.addEventListener('touchend', (e)=>{ e.preventDefault(); touchState.active=false; });
 
 /* ---------- MOVEMENT & PHYSICS ---------- */
-function effectiveSpeed(player){
-    // nagyobb méretnél lassul: base / sqrt(sizeFactor) -> enyhítve log skálával
+function effectiveSpeed(player) {
     const sizeFactor = Math.max(1, player.radius / 20);
-    return (player.baseSpeed / Math.sqrt(sizeFactor)) * player.boost;
+    const speed = Math.min(6, (player.baseSpeed / Math.sqrt(sizeFactor)) * (player.boost || 1)); // Max sebesség 6
+    if (speed < 0.5) {
+        console.warn('Túl alacsony sebesség:', { speed, radius: player.radius, baseSpeed: player.baseSpeed });
+        return 0.5; // Minimum sebesség
+    }
+    return speed;
 }
 
 /* ---------- GAME MECHANICS: split / eject / growth ---------- */
@@ -349,7 +382,7 @@ function doSplit(player){
     frag.x = player.x + fragR + 2;
     frag.y = player.y;
     // direction - player's facing approximated from keys or towards mouse (we'll use last input vector)
-    const dir = getInputDirection(player === player1 ? 1 : 2);
+    const dir = getInputDirection();
     const mag = Math.hypot(dir.x, dir.y) || 1;
     frag.vx = (dir.x / mag) * (8 + fragR/6);
     frag.vy = (dir.y / mag) * (8 + fragR/6);
@@ -368,7 +401,7 @@ function doEject(player){
     p.radius = 3;
     p.x = player.x + (player.radius + 8);
     p.y = player.y;
-    const dir = getInputDirection(player === player1 ? 1 : 2);
+    const dir = getInputDirection();
     const mag = Math.hypot(dir.x, dir.y) || 1;
     p.vx = (dir.x / mag) * 6;
     p.vy = (dir.y / mag) * 6;
@@ -378,124 +411,169 @@ function doEject(player){
 }
 
 /* ---------- NPC AI ---------- */
-function updateNPCs(dt){
+function updateNPCs(dt) {
     const now = nowMs();
-    
-    for(const npc of npcs){
-        // Véletlenszerű célpont változtatás időnként
-        if(now > npc.targetChangeTime || 
-           Math.abs(npc.x - npc.targetX) < 10 && Math.abs(npc.y - npc.targetY) < 10){
-            npc.targetX = Math.random() * worldWidth;
-            npc.targetY = Math.random() * worldHeight;
+    const maxStep = 5; // Nagyobb lépésméret: 5 pixel/update
+
+    for (const npc of npcs) {
+        if (isNaN(npc.x) || isNaN(npc.y)) {
+            console.warn('NPC koordinátái NaN, visszaállítás:', npc);
+            npc.x = Math.random() * worldWidth;
+            npc.y = Math.random() * worldHeight;
+            npc.targetX = npc.x;
+            npc.targetY = npc.y;
             npc.targetChangeTime = now + 2000 + Math.random() * 3000;
+            addToCell(npc);
+            continue;
         }
-        
-        // Mozgás a célpont felé
-        const dx = npc.targetX - npc.x;
-        const dy = npc.targetY - npc.y;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        
-        if(dist > 0){
-            const speed = effectiveSpeed(npc) * (dt/16.6667);
-            npc.x += (dx/dist) * speed;
-            npc.y += (dy/dist) * speed;
+
+        let moveX = 0, moveY = 0;
+        let moved = false;
+
+        // 1. Játékos elkerülése (csak player1)
+        const pdx = npc.x - player1.x;
+        const pdy = npc.y - player1.y;
+        const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+        if (pdist < player1.radius + npc.radius + 200 && pdist > 0) {
+            const avoidSpeed = effectiveSpeed(npc) * (dt / 16.6667) * 1.5; // Gyorsabb elkerülés
+            moveX = (pdx / pdist) * avoidSpeed;
+            moveY = (pdy / pdist) * avoidSpeed;
+            if (isNaN(moveX) || isNaN(moveY)) {
+                console.warn('NaN a játékos elkerülésében:', { pdx, pdy, pdist });
+                moveX = 0;
+                moveY = 0;
+            } else {
+                moved = true;
+                console.log('NPC kerüli a játékost:', { npcId: npc.id, moveX, moveY, pdist });
+            }
         }
-        
-        // Ételek keresése a közelben
-        const nearby = queryNearby(npc.x, npc.y, npc.radius + 100);
-        let closestFood = null;
-        let closestDist = Infinity;
-        
-        for(const obj of nearby){
-            if(obj.type === 'food'){
-                const d = dist2(npc.x, npc.y, obj.x, obj.y);
-                if(d < closestDist){
-                    closestDist = d;
-                    closestFood = obj;
+
+        // 2. Étel keresése, ha nem kerülünk játékost
+        if (!moved) {
+            const nearby = queryNearby(npc.x, npc.y, npc.radius + 150); // Nagyobb keresési távolság
+            let closestFood = null;
+            let closestDist = Infinity;
+            for (const obj of nearby) {
+                if (obj.type === 'food') {
+                    const d = dist2(npc.x, npc.y, obj.x, obj.y);
+                    if (d < closestDist) {
+                        closestDist = d;
+                        closestFood = obj;
+                    }
                 }
             }
-        }
-        
-        // Ha talált ételt, arra mozog
-        if(closestFood){
-            const fdx = closestFood.x - npc.x;
-            const fdy = closestFood.y - npc.y;
-            const fdist = Math.sqrt(fdx*fdx + fdy*fdy);
-            
-            if(fdist > 0){
-                const speed = effectiveSpeed(npc) * (dt/16.6667);
-                npc.x += (fdx/fdist) * speed;
-                npc.y += (fdy/fdist) * speed;
-            }
-        }
-        
-        // Játékosok elkerülése, ha nagyobbak
-        for(const player of [player1, player2]){
-            if(player.radius > npc.radius * 1.2){
-                const pdx = npc.x - player.x;
-                const pdy = npc.y - player.y;
-                const pdist = Math.sqrt(pdx*pdx + pdy*pdy);
-                
-                if(pdist < player.radius + npc.radius + 200){
-                    const avoidSpeed = effectiveSpeed(npc) * (dt/16.6667) * 1.5;
-                    if(pdist > 0){
-                        npc.x += (pdx/pdist) * avoidSpeed;
-                        npc.y += (pdy/pdist) * avoidSpeed;
+            if (closestFood) {
+                const fdx = closestFood.x - npc.x;
+                const fdy = closestFood.y - npc.y;
+                const fdist = Math.sqrt(fdx * fdx + fdy * fdy);
+                if (fdist > 0) {
+                    const speed = effectiveSpeed(npc) * (dt / 16.6667) * 1.2; // Gyorsabb ételkeresés
+                    moveX = (fdx / fdist) * speed;
+                    moveY = (fdy / fdist) * speed;
+                    if (isNaN(moveX) || isNaN(moveY)) {
+                        console.warn('NaN az étel keresésében:', { fdx, fdy, fdist });
+                        moveX = 0;
+                        moveY = 0;
+                    } else {
+                        moved = true;
+                        console.log('NPC étel felé mozog:', { npcId: npc.id, moveX, moveY, fdist });
                     }
                 }
             }
         }
-        
-        // Világ határain belül tartás
-        npc.x = clamp(npc.x, npc.radius, worldWidth - npc.radius);
-        npc.y = clamp(npc.y, npc.radius, worldHeight - npc.radius);
+
+        // 3. Véletlenszerű mozgás, ha nincs más cél
+        if (!moved) {
+            if (now > npc.targetChangeTime ||
+                Math.abs(npc.x - npc.targetX) < 20 && Math.abs(npc.y - npc.targetY) < 20) {
+                const maxTargetDist = 300; // Nagyobb célpont távolság
+                const angle = Math.random() * Math.PI * 2;
+                npc.targetX = npc.x + Math.cos(angle) * maxTargetDist * (0.5 + Math.random() * 0.5); // Minimum 150px távolság
+                npc.targetY = npc.y + Math.sin(angle) * maxTargetDist * (0.5 + Math.random() * 0.5);
+                npc.targetX = clamp(npc.targetX, npc.radius, worldWidth - npc.radius);
+                npc.targetY = clamp(npc.targetY, npc.radius, worldHeight - npc.radius);
+                npc.targetChangeTime = now + 3000 + Math.random() * 4000; // Hosszabb idő új célpontig
+                console.log('Új célpont generálva NPC-nek:', { npcId: npc.id, targetX: npc.targetX, targetY: npc.targetY });
+            }
+            const dx = npc.targetX - npc.x;
+            const dy = npc.targetY - npc.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > 0) {
+                const speed = effectiveSpeed(npc) * (dt / 16.6667) * 1.1; // Enyhén gyorsabb véletlenszerű mozgás
+                moveX = (dx / dist) * speed;
+                moveY = (dy / dist) * speed;
+                if (isNaN(moveX) || isNaN(moveY)) {
+                    console.warn('NaN a véletlenszerű mozgásban:', { dx, dy, dist });
+                    moveX = 0;
+                    moveY = 0;
+                } else {
+                    moved = true;
+                    console.log('NPC véletlenszerűen mozog:', { npcId: npc.id, moveX, moveY, dist });
+                }
+            }
+        }
+
+        // Kis véletlenszerű mozgás csak végső esetben
+        if (!moved) {
+            const randomStep = maxStep * 0.3; // Csökkentett amplitúdó
+            moveX = (Math.random() - 0.5) * randomStep;
+            moveY = (Math.random() - 0.5) * randomStep;
+            console.log('Kis véletlenszerű mozgás:', { npcId: npc.id, moveX, moveY });
+        }
+
+        // Lépésméret korlátozása
+        const totalDist = Math.sqrt(moveX * moveX + moveY * moveY);
+        if (totalDist > maxStep) {
+            moveX = (moveX / totalDist) * maxStep;
+            moveY = (moveY / totalDist) * maxStep;
+            console.log('Lépésméret korlátozva:', { npcId: npc.id, moveX, moveY, totalDist });
+        }
+
+        // Pozíció frissítése és világ határain belül tartás
+        if (!isNaN(moveX) && !isNaN(moveY)) {
+            npc.x += moveX;
+            npc.y += moveY;
+            npc.x = clamp(npc.x, npc.radius, worldWidth - npc.radius);
+            npc.y = clamp(npc.y, npc.radius, worldHeight - npc.radius);
+            console.log('NPC pozíció frissítve:', { npcId: npc.id, x: npc.x, y: npc.y });
+        } else {
+            console.warn('Pozíciófrissítés kihagyva NaN miatt:', { moveX, moveY, npc });
+        }
+
+        // Cella frissítése
+        const idx = cellIndexFor(npc.x, npc.y);
+        if (idx !== npc._cell) {
+            removeFromCell(npc);
+            addToCell(npc);
+            console.log('NPC cella frissítve:', { npcId: npc.id, newCell: idx });
+        }
     }
 }
 
 /* ---------- INPUT DIRECTION helper ---------- */
-// playerIndex 1 or 2
-function getInputDirection(playerIdx){
-    if(playerIdx===1){
-        // WASD or touch
-        let dx=0,dy=0;
-        if(keys['w']) dy -= 1;
-        if(keys['s']) dy += 1;
-        if(keys['a']) dx -= 1;
-        if(keys['d']) dx += 1;
-        if(touchState.active){
-            // convert touch pos to world coords and aim
-            const rect = canvas.getBoundingClientRect();
-            const tx = (touchState.tx / (canvas.width)) * (canvas.width); // already in canvas pixels
-            const ty = (touchState.ty / (canvas.height)) * (canvas.height);
-            // convert to world coords via camera
-            const worldX = camX + tx * (1); const worldY = camY + ty * (1);
-            dx = worldX - player1.x; dy = worldY - player1.y;
-        }
-        // gamepad override
-        if(haveGamepad){
-            const gp = navigator.getGamepads()[0];
-            if(gp){
-                const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-                if(Math.abs(ax) > 0.12 || Math.abs(ay) > 0.12){ dx = ax; dy = ay; }
-            }
-        }
-        return {x:dx,y:dy};
-    } else {
-        let dx=0,dy=0;
-        if(keys['arrowup']) dy -= 1;
-        if(keys['arrowdown']) dy += 1;
-        if(keys['arrowleft']) dx -= 1;
-        if(keys['arrowright']) dx += 1;
-        // 2nd gamepad support
-        if(haveGamepad){
-            const gp = navigator.getGamepads()[1] || navigator.getGamepads()[0];
-            if(gp){
-                const ax = gp.axes[2] || 0, ay = gp.axes[3] || 0;
-                if(Math.abs(ax) > 0.12 || Math.abs(ay) > 0.12){ dx = ax; dy = ay; }
-            }
-        }
-        return {x:dx,y:dy};
+function getInputDirection(){
+    let dx=0,dy=0;
+    if(keys['w']) dy -= 1;
+    if(keys['s']) dy += 1;
+    if(keys['a']) dx -= 1;
+    if(keys['d']) dx += 1;
+    if(touchState.active){
+        // convert touch pos to world coords and aim
+        const tx = touchState.tx;
+        const ty = touchState.ty;
+        const worldX = camX + tx;
+        const worldY = camY + ty;
+        dx = worldX - player1.x; dy = worldY - player1.y;
     }
+    // gamepad override
+    if(haveGamepad){
+        const gp = navigator.getGamepads()[0];
+        if(gp){
+            const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+            if(Math.abs(ax) > 0.12 || Math.abs(ay) > 0.12){ dx = ax; dy = ay; }
+        }
+    }
+    return {x:dx,y:dy};
 }
 
 /* ---------- COLLISIONS / UPDATES ---------- */
@@ -566,97 +644,97 @@ function updateEntities(dt){
     }
 }
 
-/* ---------- COLLISION CHECKS (optimized) ---------- */
 function checkCollisions(){
-    // players collect foods/powerups/pellets/fragments interactions
+    // Játékos ételek, power-upok és pelletek felvétele
     handlePlayerPickup(player1);
-    handlePlayerPickup(player2);
     
-    // NPC-k ételek felvétele
+    // NPC-k ételek és power-upok felvétele
     for(const npc of npcs){
+        if(isNaN(npc.x) || isNaN(npc.y)){
+            console.warn('NPC koordinátái NaN, visszaállítás:', npc);
+            const idx = npcs.indexOf(npc);
+            npcs.splice(idx, 1);
+            npcs.push(makeNPC());
+            continue;
+        }
         handleNPCPickup(npc);
     }
 
-    // fragments and pellets can be eaten by players/fragments
+    // Fragmentumok és pelletek ütközései
     for(const frag of fragments){
-        // fragments can eat foods and pellets
+        if(isNaN(frag.x) || isNaN(frag.y)){
+            console.warn('Fragmentum koordinátái NaN, visszaállítás:', frag);
+            const idx = fragments.indexOf(frag);
+            fragments.splice(idx, 1);
+            continue;
+        }
         const near = queryNearby(frag.x, frag.y, frag.radius + 8);
         for(const o of near){
             if(o.type === 'food'){
                 const rsum = frag.radius + o.radius;
-                if(dist2(frag.x,frag.y,o.x,o.y) < rsum*rsum){
-                    // grow fragment a bit
+                if(dist2(frag.x, frag.y, o.x, o.y) < rsum*rsum){
                     frag.radius = Math.min(MAX_PLAYER_RADIUS, frag.radius + 0.7);
-                    // respawn food: move to new position
                     moveToRandomFood(o);
                 }
             } else if(o.type === 'pellet'){
-                // absorb pellet
                 const rsum = frag.radius + o.radius;
-                if(dist2(frag.x,frag.y,o.x,o.y) < rsum*rsum){
+                if(dist2(frag.x, frag.y, o.x, o.y) < rsum*rsum){
                     frag.radius = Math.min(MAX_PLAYER_RADIUS, frag.radius + 0.6);
-                    // remove pellet
                     removeFromCell(o);
                     const idx = pellets.indexOf(o);
-                    if(idx>=0) pellets.splice(idx,1);
+                    if(idx >= 0) pellets.splice(idx, 1);
                     pelletPool.push(o);
                 }
             } else if(o.type === 'power'){
                 const rsum = frag.radius + o.radius;
-                if(dist2(frag.x,frag.y,o.x,o.y) < rsum*rsum){
-                    // small effect: mass
+                if(dist2(frag.x, frag.y, o.x, o.y) < rsum*rsum){
                     frag.radius = Math.min(MAX_PLAYER_RADIUS, frag.radius + 3);
                     removeFromCell(o);
                     powerupPool.push(o);
                     const pi = powerups.indexOf(o);
-                    if(pi>=0) powerups.splice(pi,1);
+                    if(pi >= 0) powerups.splice(pi, 1);
                 }
             }
         }
     }
 
-    // pellets collision with players
-    for(let i=pellets.length-1;i>=0;i--){
+    // Pelletek ütközése játékosokkal és NPC-kkel
+    for(let i = pellets.length - 1; i >= 0; i--){
         const p = pellets[i];
-        // player1
+        if(isNaN(p.x) || isNaN(p.y)){
+            console.warn('Pellet koordinátái NaN, eltávolítás:', p);
+            removeFromCell(p);
+            pellets.splice(i, 1);
+            pelletPool.push(p);
+            continue;
+        }
         const rsum1 = player1.radius + p.radius;
-        if(dist2(player1.x,player1.y,p.x,p.y) < rsum1*rsum1){
-            player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + p.radius*0.6);
+        if(dist2(player1.x, player1.y, p.x, p.y) < rsum1*rsum1){
+            player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + p.radius * 0.6);
             removeFromCell(p);
             pelletPool.push(p);
-            pellets.splice(i,1);
+            pellets.splice(i, 1);
             continue;
         }
-        // player2
-        const rsum2 = player2.radius + p.radius;
-        if(dist2(player2.x,player2.y,p.x,p.y) < rsum2*rsum2){
-            player2.radius = Math.min(MAX_PLAYER_RADIUS, player2.radius + p.radius*0.6);
-            removeFromCell(p);
-            pelletPool.push(p);
-            pellets.splice(i,1);
-            continue;
-        }
-        // NPC-k
         for(const npc of npcs){
             const rsum = npc.radius + p.radius;
-            if(dist2(npc.x,npc.y,p.x,p.y) < rsum*rsum){
-                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + p.radius*0.6);
+            if(dist2(npc.x, npc.y, p.x, p.y) < rsum*rsum){
+                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + p.radius * 0.6);
                 removeFromCell(p);
                 pelletPool.push(p);
-                pellets.splice(i,1);
+                pellets.splice(i, 1);
                 break;
             }
         }
     }
 
-    // players collide with foods and powerups (optimized: queryNearby)
+    // Játékosok ételek és power-upok felvétele (optimalizált: queryNearby)
     function playerFoodAndPower(player){
         const q = queryNearby(player.x, player.y, player.radius + 8);
         for(const o of q){
             if(o.type === 'food'){
                 const rsum = player.radius + o.radius;
-                if(dist2(player.x,player.y,o.x,o.y) < rsum*rsum){
-                    // grow with diminishing returns at big size
+                if(dist2(player.x, player.y, o.x, o.y) < rsum*rsum){
                     const grow = Math.max(0.5, 2 * (20 / Math.max(20, player.radius)));
                     player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + grow);
                     player.score++;
@@ -664,111 +742,105 @@ function checkCollisions(){
                 }
             } else if(o.type === 'power'){
                 const rsum = player.radius + o.radius;
-                if(dist2(player.x,player.y,o.x,o.y) < rsum*rsum){
+                if(dist2(player.x, player.y, o.x, o.y) < rsum*rsum){
                     applyPowerupToPlayer(player, o);
                     removeFromCell(o);
                     const idx = powerups.indexOf(o);
-                    if(idx>=0) powerups.splice(idx,1);
+                    if(idx >= 0) powerups.splice(idx, 1);
                     powerupPool.push(o);
                 }
             }
         }
     }
     playerFoodAndPower(player1);
-    playerFoodAndPower(player2);
     
-    // NPC-k ételek és powerupok felvétele
-    function handleNPCPickup(npc){
-        const q = queryNearby(npc.x, npc.y, npc.radius + 8);
-        for(const o of q){
-            if(o.type === 'food'){
-                const rsum = npc.radius + o.radius;
-                if(dist2(npc.x,npc.y,o.x,o.y) < rsum*rsum){
-                    const grow = Math.max(0.5, 2 * (20 / Math.max(20, npc.radius)));
-                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + grow);
-                    npc.score++;
-                    moveToRandomFood(o);
-                }
-            } else if(o.type === 'power'){
-                const rsum = npc.radius + o.radius;
-                if(dist2(npc.x,npc.y,o.x,o.y) < rsum*rsum){
-                    // NPC-k csak a mass powerupt használják
-                    if(o.kind === 'mass'){
-                        npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + 6);
-                    }
-                    removeFromCell(o);
-                    powerupPool.push(o);
-                    const idx = powerups.indexOf(o);
-                    if(idx>=0) powerups.splice(idx,1);
-                }
-            }
-        }
-    }
+    // NPC-k ételek és power-upok felvétele
+function handleNPCPickup(npc) {
+    const q = queryNearby(npc.x, npc.y, npc.radius + 8);
+    for (const o of q) {
+        const rsum = npc.radius + o.radius;
+        if (dist2(npc.x, npc.y, o.x, o.y) >= rsum * rsum) continue;
 
-    // player-player collisions (eating)
-    const dx = player2.x - player1.x, dy = player2.y - player1.y;
-    const d2 = dx*dx + dy*dy;
-    const rsum = player1.radius + player2.radius;
-    if(d2 > 0 && d2 < rsum*rsum){
-        const dist = Math.sqrt(d2);
-        if(player1.radius > player2.radius + 6){
-            // p1 eats p2
-            player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + Math.floor(player2.radius*0.6));
-            player1.score += 10;
-            // reset player2
-            resetPlayerTo(player2, worldWidth*0.75, worldHeight*0.5);
-        } else if(player2.radius > player1.radius + 6){
-            player2.radius = Math.min(MAX_PLAYER_RADIUS, player2.radius + Math.floor(player1.radius*0.6));
-            player2.score += 10;
-            resetPlayerTo(player1, worldWidth*0.25, worldHeight*0.5);
-        } else {
-            // bounce overlap
-            const overlap = (rsum - dist);
-            const nx = dx / dist, ny = dy / dist;
-            player1.x -= nx * overlap * 0.5;
-            player1.y -= ny * overlap * 0.5;
-            player2.x += nx * overlap * 0.5;
-            player2.y += ny * overlap * 0.5;
+        if (o.type === 'food') {
+            const grow = Math.max(0.5, 2 * (20 / Math.max(20, npc.radius)));
+            npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + grow);
+            npc.score++;
+            moveToRandomFood(o);
+        }
+
+        else if (o.type === 'power') {
+            if (o.kind === 'mass') {
+                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + 6);
+            }
+            else if (o.kind === 'dot') {
+                npc.score += 1;
+            }
+            else if (o.kind === 'power') {
+                // NPC-specifikus extra bónusz
+                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + 3);
+                npc.baseSpeed = Math.min(npc.baseSpeed + 0.5, 6);
+            }
+            else if (o.kind === 'fruit') {
+                npc.score += 100;
+            }
+            else if (o.kind === 'speed') {
+				if (!npc.speedBoostActive) { // csak akkor, ha nincs már boost
+					npc.speedBoostActive = true;
+					npc.baseSpeed *= 1.5; // pl. 50%-kal gyorsabb
+					setTimeout(() => {
+						npc.baseSpeed /= 1.5; // visszaállítás
+						npc.speedBoostActive = false;
+					}, 5000); // 5 másodpercig tart
+				}
+			}
+            else if (o.kind === 'shield') {
+                npc.shieldActive = true;
+                npc.shieldTimer = Date.now();
+                setTimeout(() => npc.shieldActive = false, 5000); // 5 mp-ig tart
+            }
+
+            // Tárgy eltávolítása a pályáról
+            removeFromCell(o);
+            const idx = powerups.indexOf(o);
+            if (idx >= 0) powerups.splice(idx, 1);
+            powerupPool.push(o);
         }
     }
-    
-    // NPC-k ütközései a játékosokkal és egymással
-    for(let i=npcs.length-1; i>=0; i--){
+}
+
+    const npcsToRemove = [];
+    const newNpcs = [];
+    for(let i = npcs.length - 1; i >= 0; i--){
         const npc = npcs[i];
+        if(isNaN(npc.x) || isNaN(npc.y)){
+            console.warn('NPC koordinátái NaN ütközéskezeléskor, visszaállítás:', npc);
+            npcsToRemove.push(i);
+            newNpcs.push(makeNPC());
+            continue;
+        }
         
         // Játékosokkal való ütközés
-        for(const player of [player1, player2]){
-            const dx = player.x - npc.x;
-            const dy = player.y - npc.y;
-            const d2 = dx*dx + dy*dy;
-            const rsum = player.radius + npc.radius;
-            
-            if(d2 > 0 && d2 < rsum*rsum){
-                if(player.radius > npc.radius + 6){
-                    // Játékos megeszi az NPC-t
-                    player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + Math.floor(npc.radius*0.6));
-                    player.score += 5;
-                    // NPC újraéledése
-                    npcs.splice(i,1);
-                    npcs.push(makeNPC());
-                    break;
-                } else if(npc.radius > player.radius + 6){
-                    // NPC megeszi a játékost
-                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(player.radius*0.6));
+        const dx = player1.x - npc.x;
+        const dy = player1.y - npc.y;
+        const d2 = dx*dx + dy*dy;
+        const rsum = player1.radius + npc.radius;
+        if(d2 > 0 && d2 < rsum*rsum){
+            const dist = Math.sqrt(d2);
+            if(dist > 0.001){ // Nulla osztás elkerülése
+                if(player1.radius > npc.radius + 6){
+                    player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + Math.floor(npc.radius*0.6));
+                    player1.score += 5;
+                    npcsToRemove.push(i);
+                    newNpcs.push(makeNPC());
+                } else if(npc.radius > player1.radius + 6){
+                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(player1.radius*0.6));
                     npc.score += 5;
-                    // Játékos visszaállítása
-                    if(player === player1){
-                        resetPlayerTo(player1, worldWidth*0.25, worldHeight*0.5);
-                    } else {
-                        resetPlayerTo(player2, worldWidth*0.75, worldHeight*0.5);
-                    }
+                    resetPlayerTo(player1, worldWidth*0.25, worldHeight*0.5);
                 } else {
-                    // Rugalmas ütközés
-                    const dist = Math.sqrt(d2);
                     const overlap = (rsum - dist);
                     const nx = dx / dist, ny = dy / dist;
-                    player.x += nx * overlap * 0.5;
-                    player.y += ny * overlap * 0.5;
+                    player1.x += nx * overlap * 0.5;
+                    player1.y += ny * overlap * 0.5;
                     npc.x -= nx * overlap * 0.5;
                     npc.y -= ny * overlap * 0.5;
                 }
@@ -776,42 +848,50 @@ function checkCollisions(){
         }
         
         // NPC-k egymással való ütközése
-        for(let j=npcs.length-1; j>i; j--){
+        for(let j = npcs.length - 1; j > i; j--){
             const other = npcs[j];
+            if(isNaN(other.x) || isNaN(other.y)){
+                console.warn('Másik NPC koordinátái NaN, visszaállítás:', other);
+                npcsToRemove.push(j);
+                newNpcs.push(makeNPC());
+                continue;
+            }
             const dx = other.x - npc.x;
             const dy = other.y - npc.y;
             const d2 = dx*dx + dy*dy;
             const rsum = npc.radius + other.radius;
-            
             if(d2 > 0 && d2 < rsum*rsum){
-                if(npc.radius > other.radius + 6){
-                    // NPC megeszi a másik NPC-t
-                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(other.radius*0.6));
-                    npc.score += 3;
-                    // Másik NPC eltávolítása és újraélesztése
-                    npcs.splice(j,1);
-                    npcs.push(makeNPC());
-                } else if(other.radius > npc.radius + 6){
-                    // Másik NPC megeszi ezt az NPC-t
-                    other.radius = Math.min(MAX_PLAYER_RADIUS, other.radius + Math.floor(npc.radius*0.6));
-                    other.score += 3;
-                    // NPC eltávolítása és újraélesztése
-                    npcs.splice(i,1);
-                    npcs.push(makeNPC());
-                    break;
-                } else {
-                    // Rugalmas ütközés
-                    const dist = Math.sqrt(d2);
-                    const overlap = (rsum - dist);
-                    const nx = dx / dist, ny = dy / dist;
-                    npc.x -= nx * overlap * 0.5;
-                    npc.y -= ny * overlap * 0.5;
-                    other.x += nx * overlap * 0.5;
-                    other.y += ny * overlap * 0.5;
+                const dist = Math.sqrt(d2);
+                if(dist > 0.001){ // Nulla osztás elkerülése
+                    if(npc.radius > other.radius + 6){
+                        npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(other.radius*0.6));
+                        npc.score += 3;
+                        npcsToRemove.push(j);
+                        newNpcs.push(makeNPC());
+                    } else if(other.radius > npc.radius + 6){
+                        other.radius = Math.min(MAX_PLAYER_RADIUS, other.radius + Math.floor(npc.radius*0.6));
+                        other.score += 3;
+                        npcsToRemove.push(i);
+                        newNpcs.push(makeNPC());
+                        break;
+                    } else {
+                        const overlap = (rsum - dist);
+                        const nx = dx / dist, ny = dy / dist;
+                        npc.x -= nx * overlap * 0.5;
+                        npc.y -= ny * overlap * 0.5;
+                        other.x += nx * overlap * 0.5;
+                        other.y += ny * overlap * 0.5;
+                    }
                 }
             }
         }
     }
+    
+    // NPC-k eltávolítása és újak hozzáadása
+    for(const i of npcsToRemove){
+        npcs.splice(i, 1);
+    }
+    npcs.push(...newNpcs);
 }
 
 function handlePlayerPickup(player){
@@ -856,6 +936,7 @@ function updateCamera(dt){
 
 /* ---------- DRAW ---------- */
 function draw(remainingMs){
+    console.log('Rajzolás, NPC-k száma:', npcs.length);
     ctx.fillStyle = '#0d0d0d';
     ctx.fillRect(0,0,canvas.width,canvas.height);
 
@@ -909,14 +990,18 @@ function draw(remainingMs){
         const sx = f.x - camX, sy = f.y - camY;
         if(sx + f.radius < 0 || sx - f.radius > canvas.width || sy + f.radius < 0 || sy - f.radius > canvas.height) continue;
         ctx.beginPath();
-        ctx.fillStyle = f.owner===player1 ? 'rgba(120,170,255,0.95)' : 'rgba(255,140,140,0.95)';
+        ctx.fillStyle = 'rgba(120,170,255,0.95)'; // Csak player1 fragmentumok
         ctx.arc(sx,sy,f.radius,0,Math.PI*2); ctx.fill();
     }
     
     // NPC-k
     for(const npc of npcs){
+        console.log(`NPC rajzolása: x=${npc.x}, y=${npc.y}`);
         const sx = npc.x - camX, sy = npc.y - camY;
-        if(sx + npc.radius < 0 || sx - npc.radius > canvas.width || sy + npc.radius < 0 || sy - npc.radius > canvas.height) continue;
+        if(sx + npc.radius < 0 || sx - npc.radius > canvas.width || sy + npc.radius < 0 || sy - npc.radius > canvas.height) {
+            console.log('NPC kívül esik a vásznon:', npc);
+            continue;
+        }
         ctx.beginPath();
         ctx.fillStyle = npc.color;
         ctx.arc(sx,sy,npc.radius,0,Math.PI*2); ctx.fill();
@@ -932,17 +1017,9 @@ function draw(remainingMs){
     ctx.arc(p1sx,p1sy,player1.radius,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='white'; ctx.font='12px Arial'; ctx.fillText('J1', p1sx-8, p1sy+4);
 
-    // player2
-    const p2sx = player2.x - camX, p2sy = player2.y - camY;
-    ctx.beginPath();
-    ctx.fillStyle = (player2.flashUntil > now ? (Math.floor(now/100) % 2 ? 'white' : 'red') : 'red');
-    ctx.arc(p2sx,p2sy,player2.radius,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='white'; ctx.font='12px Arial'; ctx.fillText('J2', p2sx-8, p2sy+4);
-
     // HUD overlay on canvas
     ctx.fillStyle='white'; ctx.font='16px Arial';
     ctx.fillText(`J1: ${player1.score}`, 10, 22);
-    ctx.fillText(`J2: ${player2.score}`, canvas.width - 110, 22);
     const remainingSec = Math.max(0, (gameTimeMs - (now - startTime))/1000).toFixed(1);
     ctx.fillText(`Idő: ${remainingSec}s`, canvas.width/2 - 40, 22);
 }
@@ -976,7 +1053,6 @@ function drawMinimap(){
     }
     // players
     c.fillStyle='blue'; c.beginPath(); c.arc(player1.x * sx, player1.y * sy, Math.max(2, player1.radius*sx), 0, Math.PI*2); c.fill();
-    c.fillStyle='red'; c.beginPath(); c.arc(player2.x * sx, player2.y * sy, Math.max(2, player2.radius*sy), 0, Math.PI*2); c.fill();
     // camera rect
     c.strokeStyle='rgba(255,255,255,0.5)'; c.strokeRect(camX*sx, camY*sy, canvas.width*sx, canvas.height*sy);
     // render to DOM element background
@@ -986,8 +1062,7 @@ function drawMinimap(){
 /* ---------- SCOREBOARD ---------- */
 function updateScoreboard(){
     const items = [
-        {name:'J1', score:player1.score, size: int(player1.radius)},
-        {name:'J2', score:player2.score, size: int(player2.radius)}
+        {name:'J1', score:player1.score, size: int(player1.radius)}
     ];
     
     // NPC-k hozzáadása a scoreboardhoz
@@ -996,9 +1071,8 @@ function updateScoreboard(){
     }
     
     items.sort((a,b)=>b.size - a.size);
-    sbEl.innerHTML = 'Top:<br>' + items.map(it=>`${it.name} — méret: ${it.size} / pont: ${it.score}`).join('<br>');
+    sbEl.innerHTML = 'Top: —<br>' + items.map(it=>`${it.name} — méret: ${it.size} / pont: ${it.score}`).join('<br>');
     score1El.textContent = player1.score;
-    score2El.textContent = player2.score;
 }
 
 /* ---------- CAMERA FOLLOW & GAME TIMER ---------- */
@@ -1036,7 +1110,7 @@ function loop(ts){
     // check end
     if(remainingMs <= 0){
         paused = true;
-        setTimeout(()=> alert(`Játék vége! J1: ${player1.score}, J2: ${player2.score}`), 20);
+        setTimeout(()=> alert(`Játék vége! J1: ${player1.score}`), 20);
         return;
     }
     requestAnimationFrame(loop);
@@ -1045,41 +1119,26 @@ function loop(ts){
 /* ---------- INPUT APPLICATION ---------- */
 function applyInputs(dt){
     // player1
-    const dir1 = getInputDirection(1);
+    const dir1 = getInputDirection();
     const mag1 = Math.hypot(dir1.x, dir1.y);
     if(mag1 > 0){
         const speed = effectiveSpeed(player1);
         player1.x += (dir1.x/mag1) * speed * (dt/16.6667);
         player1.y += (dir1.y/mag1) * speed * (dt/16.6667);
     }
-    // player2
-    const dir2 = getInputDirection(2);
-    const mag2 = Math.hypot(dir2.x, dir2.y);
-    if(mag2 > 0){
-        const speed = effectiveSpeed(player2);
-        player2.x += (dir2.x/mag2) * speed * (dt/16.6667);
-        player2.y += (dir2.y/mag2) * speed * (dt/16.6667);
-    }
 
     // clamp players in world
     player1.x = clamp(player1.x, player1.radius, worldWidth - player1.radius);
     player1.y = clamp(player1.y, player1.radius, worldHeight - player1.radius);
-    player2.x = clamp(player2.x, player2.radius, worldWidth - player2.radius);
-    player2.y = clamp(player2.y, player2.radius, worldHeight - player2.radius);
 
     // boosts expire
     const now = nowMs();
     if(player1.boostUntil < now) { player1.boost = 1; player1.boostUntil = 0; }
-    if(player2.boostUntil < now) { player2.boost = 1; player2.boostUntil = 0; }
 
     // actions: split/eject
     // player1: space -> split, q -> eject
     if(keys['space']){ keys['space'] = false; doSplit(player1); }
     if(keys['q']){ keys['q'] = false; doEject(player1); }
-
-    // player2: enter -> split, shift -> eject (Right Shift)
-    if(keys['enter']){ keys['enter'] = false; doSplit(player2); }
-    if(keys['shift'] || keys['rshift'] || keys['shiftright']){ if(keys['shift']){ keys['shift']=false; doEject(player2); } }
 
     // gamepad buttons for split/eject (poll)
     if(haveGamepad){
@@ -1114,8 +1173,7 @@ function startGame(){
     powerups.length=0;
     // reset players
     player1 = makePlayer(worldWidth*0.25, worldHeight*0.5,'blue');
-    player2 = makePlayer(worldWidth*0.75, worldHeight*0.5,'red');
-    player1.score = 0; player2.score = 0;
+    player1.score = 0;
     // NPC-k inicializálása
     initNPCs();
     startTime = nowMs();
@@ -1129,8 +1187,14 @@ startGame();
 /* ---------- DEBUG shortcuts ---------- */
 window.addEventListener('keydown',(e)=>{
     if(e.key === 'p'){ paused = !paused; }
-    if(e.key === 'g'){ GRID_SIZE = Math.max(80, GRID_SIZE - 20); initGrid(); spawnFoods(foodCount); }
-    if(e.key === 'h'){ GRID_SIZE = GRID_SIZE + 20; initGrid(); spawnFoods(foodCount); }
+    if(e.key === 'g'){ GRID_SIZE = Math.max(80, GRID_SIZE - 20); initGrid(); spawnFoods(foodCount); 
+        // Re-add NPCs to grid
+        for(const npc of npcs) { npc._cell = -1; addToCell(npc); }
+    }
+    if(e.key === 'h'){ GRID_SIZE = GRID_SIZE + 20; initGrid(); spawnFoods(foodCount); 
+        // Re-add NPCs to grid
+        for(const npc of npcs) { npc._cell = -1; addToCell(npc); }
+    }
 });
 </script>
 </body>
