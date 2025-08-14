@@ -1,5 +1,5 @@
 {
-  "name": "agar-io-clone",
+  "name": "agar-io-multiplayer",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -7,10 +7,10 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "express": "^4.17.1",
-    "ws": "^8.2.3"
+    "express": "^4.18.2",
+    "ws": "^8.13.0"
   },
   "engines": {
-    "node": ">=14.x"
+    "node": ">=16.0.0"
   }
 }
