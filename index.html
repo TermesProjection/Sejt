@@ -275,7 +275,16 @@ canvas {
     </div>
     <div>
         <label>Játékos újraéledése: 
-            <select id="respawnMode">
+            <select id="playerRespawnMode">
+                <option value="yes">Igen</option>
+                <option value="no">Nem</option>
+                <option value="limited">Korlátozott (3 élet)</option>
+            </select>
+        </label>
+    </div>
+    <div>
+        <label>NPC-k újraéledése: 
+            <select id="npcRespawnMode">
                 <option value="yes">Igen</option>
                 <option value="no">Nem</option>
                 <option value="limited">Korlátozott (3 élet)</option>
@@ -398,7 +407,8 @@ const config = {
     speedPowerups: 10,
     shieldPowerups: 10,
     massPowerups: 10,
-    respawnMode: 'yes'
+    playerRespawnMode: 'yes',
+    npcRespawnMode: 'yes'
 };
 
 /* ========== SEGÉDFÜGGVÉNYEK ========== */
@@ -572,6 +582,32 @@ function createPlayer(x, y, color) {
     return player;
 }
 
+function handleNPCCollision(npc, index) {
+    if(npc.radius <= 0) {
+        switch(config.npcRespawnMode) {
+            case 'yes':
+                npcs[index] = createNPC();
+                addToCell(npcs[index]);
+                break;
+            case 'no':
+                removeFromCell(npc);
+                npcs.splice(index, 1);
+                break;
+            case 'limited':
+                if(npc.lives > 1) {
+                    npc.lives--;
+                    npc.radius = NPC_RADIUS_MIN;
+                    npc.x = Math.random() * worldWidth;
+                    npc.y = Math.random() * worldHeight;
+                } else {
+                    removeFromCell(npc);
+                    npcs.splice(index, 1);
+                }
+                break;
+        }
+    }
+}
+
 function createNPC() {
     const colors = ['#8f4', '#f84', '#48f', '#f8f', '#8ff', '#ff8'];
     const x = Math.random() * worldWidth;
@@ -586,6 +622,7 @@ function createNPC() {
         targetChangeTime: 0,
         color: colors[Math.floor(Math.random() * colors.length)],
         score: 0,
+        lives: config.npcRespawnMode === 'limited' ? 3 : 1,
         id: 'npc_' + Math.random().toString(36).slice(2, 7),
         vx: 0,
         vy: 0,
@@ -593,6 +630,7 @@ function createNPC() {
         splitting: null,
         merging: null
     };
+    
     for(let i = 0; i < ORGANELLE_COUNT; i++) {
         npc.organelles.push({
             x: (Math.random() - 0.5) * npc.radius * 0.8,
@@ -718,16 +756,24 @@ foodCountInput.addEventListener('change', () => {
     }
 });
 
-applyConfigBtn.addEventListener('click', () => {
+document.getElementById('applyConfig').addEventListener('click', () => {
     config.speedPowerups = parseInt(document.getElementById('speedPowerups').value);
     config.shieldPowerups = parseInt(document.getElementById('shieldPowerups').value);
     config.massPowerups = parseInt(document.getElementById('massPowerups').value);
-    config.respawnMode = document.getElementById('respawnMode').value;
+    config.playerRespawnMode = document.getElementById('playerRespawnMode').value;
+    config.npcRespawnMode = document.getElementById('npcRespawnMode').value;
     
-    // Frissítjük a játékos életeket, ha korlátozott újraéledés van
-    if(config.respawnMode === 'limited') {
+    // Frissítjük a játékos életeket
+    if(config.playerRespawnMode === 'limited') {
         player1.lives = 3;
         livesEl.textContent = player1.lives;
+    }
+    
+    // Frissítjük az NPC-k életeit
+    if(config.npcRespawnMode === 'limited') {
+        npcs.forEach(npc => {
+            npc.lives = 3;
+        });
     }
     
     // Újrapopuláljuk a power-upokat
@@ -1188,8 +1234,21 @@ function checkCollisions() {
                 if(player1.radius > npc.radius + EAT_SIZE_DIFF) {
                     player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + Math.floor(npc.radius * CANNIBAL_GROW_FACTOR));
                     player1.score += NPC_EAT_SCORE_GAIN;
+                    
+                    // Handle NPC death based on respawn mode
+                    if(config.npcRespawnMode === 'yes') {
+                        const newNpc = createNPC();
+                        newNpc._cell = -1;
+                        addToCell(newNpc);
+                        newNpcs.push(newNpc);
+                    } else if(config.npcRespawnMode === 'limited' && npc.lives > 1) {
+                        npc.lives--;
+                        npc.radius = NPC_RADIUS_MIN;
+                        npc.x = Math.random() * worldWidth;
+                        npc.y = Math.random() * worldHeight;
+                        continue; // Skip removal
+                    }
                     npcsToRemove.push(i);
-                    newNpcs.push(createNPC());
                 } 
                 else if(npc.radius > player1.radius + EAT_SIZE_DIFF) {
                     npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(player1.radius * CANNIBAL_GROW_FACTOR));
@@ -1221,14 +1280,40 @@ function checkCollisions() {
                     if(npc.radius > other.radius + EAT_SIZE_DIFF) {
                         npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(other.radius * CANNIBAL_GROW_FACTOR));
                         npc.score += NPC_NPC_EAT_SCORE_GAIN;
+                        
+                        // Handle other NPC death
+                        if(config.npcRespawnMode === 'yes') {
+                            const newNpc = createNPC();
+                            newNpc._cell = -1;
+                            addToCell(newNpc);
+                            newNpcs.push(newNpc);
+                        } else if(config.npcRespawnMode === 'limited' && other.lives > 1) {
+                            other.lives--;
+                            other.radius = NPC_RADIUS_MIN;
+                            other.x = Math.random() * worldWidth;
+                            other.y = Math.random() * worldHeight;
+                            continue; // Skip removal
+                        }
                         npcsToRemove.push(j);
-                        newNpcs.push(createNPC());
                     } 
                     else if(other.radius > npc.radius + EAT_SIZE_DIFF) {
                         other.radius = Math.min(MAX_PLAYER_RADIUS, other.radius + Math.floor(npc.radius * CANNIBAL_GROW_FACTOR));
                         other.score += NPC_NPC_EAT_SCORE_GAIN;
+                        
+                        // Handle current NPC death
+                        if(config.npcRespawnMode === 'yes') {
+                            const newNpc = createNPC();
+                            newNpc._cell = -1;
+                            addToCell(newNpc);
+                            newNpcs.push(newNpc);
+                        } else if(config.npcRespawnMode === 'limited' && npc.lives > 1) {
+                            npc.lives--;
+                            npc.radius = NPC_RADIUS_MIN;
+                            npc.x = Math.random() * worldWidth;
+                            npc.y = Math.random() * worldHeight;
+                            continue; // Skip removal
+                        }
                         npcsToRemove.push(i);
-                        newNpcs.push(createNPC());
                         break;
                     } 
                     else {
@@ -1244,9 +1329,13 @@ function checkCollisions() {
         }
     }
     
-    for(const i of npcsToRemove) {
+    // Remove dead NPCs
+    for(const i of npcsToRemove.sort((a,b) => b-a)) {
+        removeFromCell(npcs[i]);
         npcs.splice(i, 1);
     }
+    
+    // Add new NPCs
     npcs.push(...newNpcs);
 }
 
@@ -1779,6 +1868,38 @@ window.addEventListener('keydown', e => {
         }
     }
 });
+
+// WebSocket kapcsolat
+const socket = new WebSocket(`wss://${window.location.hostname}`);
+
+// Alternatív módszer, ha a Render URL-t használod
+// const socket = new WebSocket('wss://your-render-app-name.onrender.com');
+
+socket.onopen = () => {
+  console.log('Connected to server');
+  document.getElementById('multiplayerStatus').textContent = 'Online';
+};
+
+socket.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  // Frissítsd a játékállapotot a kapott adatok alapján
+};
+
+socket.onclose = () => {
+  console.log('Disconnected from server');
+  document.getElementById('multiplayerStatus').textContent = 'Offline';
+};
+
+// Példa adat küldésére
+function sendMove(x, y) {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      type: 'move',
+      x,
+      y
+    }));
+  }
+}
 </script>
 </body>
 </html>
