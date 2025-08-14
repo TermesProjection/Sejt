@@ -1,0 +1,1905 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Agar-klón — Konfigurálható NPC ellenségekkel</title>
+<style>
+/* === ALAP STÍLUSOK === */
+:root {
+  /* Színváltozók */
+  --bg: #111;
+  --panel: #111;
+  --text: #fff;
+  --accent: #3aa;
+  --danger: #e44;
+  --button-bg: #444;
+  --border-color: rgba(255, 255, 255, 0.06);
+  --overlay-dark: rgba(0, 0, 0, 0.25);
+  --overlay-light: rgba(0, 0, 0, 0.2);
+
+  /* Távolságok */
+  --space-xxs: 4px;
+  --space-xs: 6px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 18px;
+
+  /* Lekerekítések */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+
+  /* Átlátszóság */
+  --opacity-md: 0.9;
+  --opacity-high: 0.95;
+}
+
+/* === ALAP ELEMEK === */
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--panel);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* === LAYOUT === */
+.container {
+  max-width: 1400px;
+  margin: 10px auto;
+  padding: var(--space-xs);
+}
+
+#topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+#hud {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+}
+
+/* === GOMBOK === */
+button, .overlayBtn {
+  padding: var(--space-xs) 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--button-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+button:hover, .overlayBtn:hover {
+  opacity: 1;
+  transform: scale(1.02);
+}
+
+.overlayBtn {
+  width: 64px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  opacity: var(--opacity-high);
+}
+
+/* === JÁTÉKTERÜLET === */
+canvas {
+  display: block;
+  margin: var(--space-sm) auto;
+  border: 2px solid var(--border-color);
+  background: var(--bg) !important;
+  touch-action: none;
+}
+
+/* === MINITÉRKÉP === */
+#minimap {
+  position: absolute;
+  right: var(--space-lg);
+  bottom: var(--space-lg);
+  width: 180px;
+  height: 120px;
+  border: 1px solid var(--border-color);
+  background: var(--overlay-dark);
+  padding: var(--space-xs);
+}
+
+/* === INFÓ PANEL === */
+.scoreboard {
+  position: absolute;
+  left: var(--space-lg);
+  top: var(--space-lg);
+  background: var(--overlay-dark);
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+#controlsDesc {
+  font-size: 13px;
+  opacity: var(--opacity-md);
+}
+
+.touchInfo {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: var(--space-xs);
+  background: var(--overlay-light);
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+/* === OVERLAY GOMBOK === */
+#overlayButtons {
+  position: fixed;
+  right: var(--space-lg);
+  top: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* === MOBIL NÉZET === */
+@media (max-width: 700px) {
+  #minimap {
+    width: 120px;
+    height: 80px;
+    right: var(--space-sm);
+    bottom: var(--space-sm);
+  }
+  
+  .scoreboard {
+    left: var(--space-sm);
+    top: var(--space-sm);
+  }
+}
+
+/* === KONFIGURÁCIÓS PANEL === */
+#configPanel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(20, 20, 20, 0.9);
+  padding: 20px;
+  border-radius: 10px;
+  z-index: 100;
+  color: white;
+}
+
+#configPanel h3 {
+  margin-top: 0;
+  color: #3aa;
+}
+
+#configPanel div {
+  margin: 10px 0;
+}
+
+#configPanel label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 300px;
+}
+
+#configPanel input, #configPanel select {
+  width: 60px;
+  padding: 5px;
+}
+
+#configPanel button {
+  width: 100%;
+  padding: 8px;
+  background: #3aa;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+/* === SEJT STÍLUSOK === */
+.cell {
+  position: absolute;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.cell-membrane {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-sizing: border-box;
+}
+
+.cell-cytoplasm {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, 
+      rgba(100, 200, 255, 0.8) 0%, 
+      rgba(50, 150, 255, 0.6) 50%, 
+      rgba(0, 100, 200, 0.4) 100%);
+  opacity: 0.9;
+}
+
+.cell-nucleus {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, 
+      rgba(255, 255, 255, 0.9) 0%, 
+      rgba(200, 230, 255, 0.7) 100%);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+.cell-organelles {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+.organelle {
+  position: absolute;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.3);
+}
+</style>
+</head>
+<body>
+<div id="configPanel">
+    <h3>Játék Beállítások</h3>
+    <div>
+        <label>Sebességnövelők száma: 
+            <input type="number" id="speedPowerups" min="0" max="50" value="10">
+        </label>
+    </div>
+    <div>
+        <label>Pajzsok száma: 
+            <input type="number" id="shieldPowerups" min="0" max="50" value="10">
+        </label>
+    </div>
+    <div>
+        <label>Tömegnövelők száma: 
+            <input type="number" id="massPowerups" min="0" max="50" value="10">
+        </label>
+    </div>
+    <div>
+        <label>Játékos újraéledése: 
+            <select id="playerRespawnMode">
+                <option value="yes">Igen</option>
+                <option value="no">Nem</option>
+                <option value="limited">Korlátozott (3 élet)</option>
+            </select>
+        </label>
+    </div>
+    <div>
+        <label>NPC-k újraéledése: 
+            <select id="npcRespawnMode">
+                <option value="yes">Igen</option>
+                <option value="no">Nem</option>
+                <option value="limited">Korlátozott (3 élet)</option>
+            </select>
+        </label>
+    </div>
+    <button id="applyConfig">Beállítások Alkalmazása</button>
+</div>
+
+<div class="container">
+    <div id="topbar">
+        <div id="hud">
+            <div>J1 (kék): <span id="score1">0</span> | Életek: <span id="lives">3</span></div>
+            <div id="controlsDesc" class="small">J1: W A S D (mozog) • Space: split • Q: eject •</div>
+        </div>
+        <div>
+            <button id="fullscreenBtn">Fullscreen</button>
+            <button id="pauseBtn">Szünet</button>
+            <button id="resetBtn">Reset</button>
+            <button id="settingsBtn">Beállítások</button>
+            <label class="small" style="margin-left:8px">Foods:
+                <input id="foodCountInput" type="number" min="200" step="200" value="8000" style="width:90px">
+            </label>
+        </div>
+    </div>
+
+    <div style="position:relative;">
+        <canvas id="gameCanvas"></canvas>
+        <div id="minimap"></div>
+        <div class="scoreboard" id="scoreboardEl">Top: —</div>
+    </div>
+    <div id="overlayButtons">
+        <button class="overlayBtn" id="splitBtn">SPLIT</button>
+        <button class="overlayBtn" id="ejectBtn">EJECT</button>
+    </div>
+    <div class="touchInfo small">Érintés: bal oldalon mozgatás, jobb oldalon split/eject gombok</div>
+</div>
+
+<script>
+/* ========== KONSTANSOK KONFIGURÁCIÓJA ========== */
+const MAX_PLAYER_RADIUS = 3000;
+const MIN_PLAYER_RADIUS = 12;
+const NPC_COUNT = 30;
+const GAME_DURATION_MS = 1420_000;
+let worldWidth = 50000;
+let worldHeight = 50000;
+let foodCount = 8000;
+let GRID_SIZE = 110;
+const MAX_PLAYER_SPEED = 1;
+const NPC_BASE_SPEED_MIN = 2;
+const NPC_BASE_SPEED_MAX = 3;
+const NPC_RADIUS_MIN = 15;
+const NPC_RADIUS_MAX = 30;
+const NPC_TARGET_CHANGE_MIN = 3000;
+const NPC_TARGET_CHANGE_RANDOM = 4000;
+const NPC_MAX_TARGET_DIST = 300;
+const NPC_AVOID_DISTANCE = 200;
+const NPC_FOOD_SEARCH_RADIUS = 150;
+const PELLET_RADIUS = 3;
+const PELLET_LIFE_MS = 4000;
+const PELLET_SPEED = 6;
+const FRAGMENT_MIN_RADIUS = 8;
+const FRAGMENT_LIFE_MS = 6000;
+const FRAGMENT_SPEED_BASE = 8;
+const FRAGMENT_SPEED_FACTOR = 6;
+const POWERUP_RADIUS = 9;
+const POWERUP_LIFE_MS = 30_000;
+const POWERUP_SPAWN_CHANCE = 0.28;
+const POWERUP_SPAWN_PROB = 0.0025;
+const SPEED_BOOST_DURATION_MS = 5000;
+const SPEED_BOOST_FACTOR = 1.6;
+const SHIELD_DURATION_MS = 2000;
+const MASS_BOOST_AMOUNT = 6;
+const NPC_SPEED_BOOST_FACTOR = 1.5;
+const NPC_SHIELD_DURATION_MS = 5000;
+const FOOD_RADIUS = 5;
+const FOOD_GROW_BASE = 1;
+const FOOD_GROW_MIN = 0.1;
+const PELLET_GROW_FACTOR = 0.6;
+const FRAG_FOOD_GROW = 0.7;
+const FRAG_PELLET_GROW = 0.6;
+const FRAG_POWER_GROW = 3;
+const CANNIBAL_GROW_FACTOR = 0.6;
+const DEATH_SCORE_LOSS = 3;
+const NPC_EAT_SCORE_GAIN = 5;
+const NPC_NPC_EAT_SCORE_GAIN = 3;
+const EAT_SIZE_DIFF = 6;
+const CAMERA_LERP = 0.16;
+const SPLIT_MIN_RADIUS = 28;
+const EJECT_MIN_RADIUS = 16;
+const EJECT_AMOUNT_FACTOR = 0.06;
+const EJECT_MIN_AMOUNT = 2;
+const PICKUP_EXTRA_RADIUS = 8;
+const PELLET_PICKUP_GROW = 0.6;
+const NPC_MAX_STEP = 5;
+const NPC_RANDOM_STEP_FACTOR = 0.3;
+const NPC_AVOID_SPEED_FACTOR = 1.5;
+const NPC_FOOD_SPEED_FACTOR = 1.2;
+const NPC_RANDOM_SPEED_FACTOR = 1.1;
+const NPC_ARRIVAL_THRESHOLD = 20;
+const FRAGMENT_DECEL_FACTOR = 0.995;
+const FRAG_MERGE_EXTRA = 6;
+const FRAG_OUT_BOUND = 100;
+const MINIMAP_FOOD_SAMPLE = 200;
+const POWERUP_SPAWN_THRESHOLD = 0.28;
+const FOOD_COLOR_INTENSITY_BASE = 200;
+const FOOD_COLOR_INTENSITY_SCALE = 55;
+const FOOD_COLOR_INTENSITY_REDUCE = 255;
+const FOOD_COLOR_INTENSITY_MIN = 105;
+const FOOD_COLOR_INTENSITY_DIV = 2;
+const GRID_LINE_SPACING = 100;
+const DEBUG_GRID_STEP = 20;
+const FRICTION_FACTOR = 0.98;
+const ORGANELLE_COUNT = 8;
+const BASE_ZOOM = 1;
+const ZOOM_SCALE_FACTOR = 0.002;
+
+/* ========== KONFIGURÁCIÓS VÁLTOZÓK ========== */
+const config = {
+    speedPowerups: 10,
+    shieldPowerups: 10,
+    massPowerups: 10,
+    playerRespawnMode: 'yes',
+    npcRespawnMode: 'yes'
+};
+
+/* ========== SEGÉDFÜGGVÉNYEK ========== */
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
+function nowMs() { return performance.now(); }
+function rand(min, max) { return min + Math.random() * (max - min); }
+function int(n) { return Math.floor(n); }
+
+/* ========== JÁTÉK ELEMEI ========== */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const minimapEl = document.getElementById('minimap');
+const sbEl = document.getElementById('scoreboardEl');
+const score1El = document.getElementById('score1');
+const livesEl = document.getElementById('lives');
+const pauseBtn = document.getElementById('pauseBtn');
+const resetBtn = document.getElementById('resetBtn');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+const settingsBtn = document.getElementById('settingsBtn');
+const foodCountInput = document.getElementById('foodCountInput');
+const splitBtn = document.getElementById('splitBtn');
+const ejectBtn = document.getElementById('ejectBtn');
+const configPanel = document.getElementById('configPanel');
+const applyConfigBtn = document.getElementById('applyConfig');
+
+let cellCols = Math.ceil(worldWidth / GRID_SIZE);
+let cellRows = Math.ceil(worldHeight / GRID_SIZE);
+let grid = Array.from({length: cellCols * cellRows}, () => []);
+
+const foodPool = [];
+const pelletPool = [];
+const fragmentPool = [];
+const powerupPool = [];
+
+function initPools() {
+    for(let i = 0; i < foodCount; i++) {
+        foodPool.push({type: 'food', x: 0, y: 0, radius: FOOD_RADIUS, _cell: -1});
+    }
+    for(let i = 0; i < 200; i++) {
+        pelletPool.push({type: 'pellet', x: 0, y: 0, radius: PELLET_RADIUS, vx: 0, vy: 0, life: 0, _cell: -1});
+    }
+    for(let i = 0; i < 200; i++) {
+        fragmentPool.push({
+            type: 'frag', 
+            owner: null, 
+            x: 0, y: 0, 
+            radius: 0, 
+            vx: 0, vy: 0, 
+            life: 0, 
+            merging: false, 
+            _cell: -1
+        });
+    }
+    for(let i = 0; i < 80; i++) {
+        powerupPool.push({
+            type: 'power', 
+            kind: 'speed', 
+            x: 0, y: 0, 
+            radius: POWERUP_RADIUS, 
+            _cell: -1, 
+            life: 0
+        });
+    }
+}
+
+function initGrid() {
+    cellCols = Math.ceil(worldWidth / GRID_SIZE);
+    cellRows = Math.ceil(worldHeight / GRID_SIZE);
+    grid = Array.from({length: cellCols * cellRows}, () => []);
+}
+
+function addToCell(obj) {
+    const idx = cellIndexFor(obj.x, obj.y);
+    if (idx >= 0 && idx < grid.length) {
+        obj._cell = idx;
+        grid[idx].push(obj);
+    }
+}
+
+function removeFromCell(obj) {
+    if (obj._cell === undefined || obj._cell < 0) return;
+    const cell = grid[obj._cell];
+    const index = cell.indexOf(obj);
+    if (index >= 0) cell.splice(index, 1);
+    obj._cell = -1;
+}
+
+function moveToCell(obj, newX, newY) {
+    removeFromCell(obj);
+    obj.x = newX;
+    obj.y = newY;
+    addToCell(obj);
+}
+
+function cellIndexFor(x, y) {
+    const cx = clamp(Math.floor(x / GRID_SIZE), 0, cellCols - 1);
+    const cy = clamp(Math.floor(y / GRID_SIZE), 0, cellRows - 1);
+    return cy * cellCols + cx;
+}
+
+function queryNearby(x, y, radius) {
+    const minCx = clamp(Math.floor((x - radius) / GRID_SIZE), 0, cellCols - 1);
+    const maxCx = clamp(Math.floor((x + radius) / GRID_SIZE), 0, cellCols - 1);
+    const minCy = clamp(Math.floor((y - radius) / GRID_SIZE), 0, cellRows - 1);
+    const maxCy = clamp(Math.floor((y + radius) / GRID_SIZE), 0, cellRows - 1);
+    
+    const result = [];
+    for(let cy = minCy; cy <= maxCy; cy++) {
+        const base = cy * cellCols;
+        for(let cx = minCx; cx <= maxCx; cx++) {
+            const cell = grid[base + cx];
+            if(cell && cell.length) {
+                result.push(...cell);
+            }
+        }
+    }
+    return result;
+}
+
+/* ========== CANVAS MÉRETBEÁLLÍTÁS ========== */
+let zoomScale = BASE_ZOOM;
+
+function resizeCanvas() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const availW = Math.min(window.innerWidth - 40, 1400);
+    const availH = Math.min(window.innerHeight - 140, 900);
+    const targetW = Math.max(680, Math.round(availW));
+    const targetH = Math.max(420, Math.round(availH));
+    
+    canvas.style.width = targetW + 'px';
+    canvas.style.height = targetH + 'px';
+    canvas.width = Math.round(targetW * dpr);
+    canvas.height = Math.round(targetH * dpr);
+    ctx.setTransform(dpr * zoomScale, 0, 0, dpr * zoomScale, 0, 0);
+}
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+/* ========== JÁTÉKOSOK ÉS NPC-K ========== */
+let player1 = null;
+let npcs = [];
+
+function createPlayer(x, y, color) {
+    const player = {
+        x, y,
+        radius: 20,
+        baseSpeed: 5,
+        boost: 1, 
+        boostUntil: 0,
+        flashUntil: 0,
+        color,
+        score: 0,
+        lives: 3,
+        id: Math.random().toString(36).slice(2, 9),
+        vx: 0,
+        vy: 0,
+        organelles: [],
+        splitting: null,
+        merging: null
+    };
+    for(let i = 0; i < ORGANELLE_COUNT; i++) {
+        player.organelles.push({
+            x: (Math.random() - 0.5) * player.radius * 0.8,
+            y: (Math.random() - 0.5) * player.radius * 0.8,
+            vx: (Math.random() - 0.5) * 2,
+            vy: (Math.random() - 0.5) * 2
+        });
+    }
+    return player;
+}
+
+function handleNPCCollision(npc, index) {
+    if(npc.radius <= 0) {
+        switch(config.npcRespawnMode) {
+            case 'yes':
+                npcs[index] = createNPC();
+                addToCell(npcs[index]);
+                break;
+            case 'no':
+                removeFromCell(npc);
+                npcs.splice(index, 1);
+                break;
+            case 'limited':
+                if(npc.lives > 1) {
+                    npc.lives--;
+                    npc.radius = NPC_RADIUS_MIN;
+                    npc.x = Math.random() * worldWidth;
+                    npc.y = Math.random() * worldHeight;
+                } else {
+                    removeFromCell(npc);
+                    npcs.splice(index, 1);
+                }
+                break;
+        }
+    }
+}
+
+function createNPC() {
+    const colors = ['#8f4', '#f84', '#48f', '#f8f', '#8ff', '#ff8'];
+    const x = Math.random() * worldWidth;
+    const y = Math.random() * worldHeight;
+    
+    const npc = {
+        x, y,
+        radius: NPC_RADIUS_MIN + Math.random() * (NPC_RADIUS_MAX - NPC_RADIUS_MIN),
+        baseSpeed: NPC_BASE_SPEED_MIN + Math.random() * (NPC_BASE_SPEED_MAX - NPC_BASE_SPEED_MIN),
+        targetX: x,
+        targetY: y,
+        targetChangeTime: 0,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        score: 0,
+        lives: config.npcRespawnMode === 'limited' ? 3 : 1,
+        id: 'npc_' + Math.random().toString(36).slice(2, 7),
+        vx: 0,
+        vy: 0,
+        organelles: [],
+        splitting: null,
+        merging: null
+    };
+    
+    for(let i = 0; i < ORGANELLE_COUNT; i++) {
+        npc.organelles.push({
+            x: (Math.random() - 0.5) * npc.radius * 0.8,
+            y: (Math.random() - 0.5) * npc.radius * 0.8,
+            vx: (Math.random() - 0.5) * 2,
+            vy: (Math.random() - 0.5) * 2
+        });
+    }
+    return npc;
+}
+
+function initNPCs() {
+    npcs = [];
+    for(let i = 0; i < NPC_COUNT; i++) {
+        const npc = createNPC();
+        npc._cell = -1;
+        addToCell(npc);
+        npcs.push(npc);
+    }
+}
+
+/* ========== JÁTÉK ELEMEK INICIALIZÁLÁSA ========== */
+let foods = [];
+let pellets = [];
+let fragments = [];
+let powerups = [];
+
+function spawnFoods(count) {
+    foods = [];
+    for(let i = 0; i < count; i++) {
+        const food = foodPool[i];
+        const r = FOOD_RADIUS;
+        food.x = r + Math.random() * (worldWidth - 2 * r);
+        food.y = r + Math.random() * (worldHeight - 2 * r);
+        food.radius = r;
+        food.type = 'food';
+        addToCell(food);
+        foods.push(food);
+    }
+}
+
+function spawnPowerups() {
+    // Töröljük a meglévő power-upokat
+    powerups.forEach(p => {
+        removeFromCell(p);
+        powerupPool.push(p);
+    });
+    powerups = [];
+    
+    // Sebességnövelők
+    for(let i = 0; i < config.speedPowerups; i++) {
+        spawnSinglePowerup('speed');
+    }
+    
+    // Pajzsok
+    for(let i = 0; i < config.shieldPowerups; i++) {
+        spawnSinglePowerup('shield');
+    }
+    
+    // Tömegnövelők
+    for(let i = 0; i < config.massPowerups; i++) {
+        spawnSinglePowerup('mass');
+    }
+}
+
+function spawnSinglePowerup(kind) {
+    const powerup = powerupPool.pop();
+    if(!powerup) return;
+    
+    powerup.kind = kind;
+    powerup.radius = POWERUP_RADIUS;
+    powerup.x = powerup.radius + Math.random() * (worldWidth - 2 * powerup.radius);
+    powerup.y = powerup.radius + Math.random() * (worldHeight - 2 * powerup.radius);
+    powerup.life = nowMs() + POWERUP_LIFE_MS;
+    powerup._cell = -1;
+    
+    addToCell(powerup);
+    powerups.push(powerup);
+}
+
+/* ========== BEMENET KEZELÉS ========== */
+const keys = {};
+
+document.addEventListener('keydown', e => {
+    const key = e.key;
+    if(key.startsWith('Arrow')) e.preventDefault();
+    if(key === ' ') { e.preventDefault(); keys['space'] = true; }
+    keys[key.toLowerCase()] = true;
+});
+
+document.addEventListener('keyup', e => {
+    const key = e.key;
+    keys[key.toLowerCase()] = false;
+    if(key === ' ') keys['space'] = false;
+});
+
+fullscreenBtn.addEventListener('click', () => {
+    if(!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+        document.exitFullscreen();
+    }
+});
+
+let paused = false;
+pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Folytat' : 'Szünet';
+    if(!paused) lastTime = nowMs();
+});
+
+resetBtn.addEventListener('click', startGame);
+
+settingsBtn.addEventListener('click', () => {
+    configPanel.style.display = configPanel.style.display === 'block' ? 'none' : 'block';
+});
+
+foodCountInput.addEventListener('change', () => {
+    const value = parseInt(foodCountInput.value, 10);
+    if(value > 0) {
+        foodCount = value;
+        startGame();
+    }
+});
+
+document.getElementById('applyConfig').addEventListener('click', () => {
+    config.speedPowerups = parseInt(document.getElementById('speedPowerups').value);
+    config.shieldPowerups = parseInt(document.getElementById('shieldPowerups').value);
+    config.massPowerups = parseInt(document.getElementById('massPowerups').value);
+    config.playerRespawnMode = document.getElementById('playerRespawnMode').value;
+    config.npcRespawnMode = document.getElementById('npcRespawnMode').value;
+    
+    // Frissítjük a játékos életeket
+    if(config.playerRespawnMode === 'limited') {
+        player1.lives = 3;
+        livesEl.textContent = player1.lives;
+    }
+    
+    // Frissítjük az NPC-k életeit
+    if(config.npcRespawnMode === 'limited') {
+        npcs.forEach(npc => {
+            npc.lives = 3;
+        });
+    }
+    
+    // Újrapopuláljuk a power-upokat
+    spawnPowerups();
+    
+    configPanel.style.display = 'none';
+});
+
+splitBtn.addEventListener('touchstart', e => {
+    e.preventDefault();
+    doSplit(player1);
+});
+
+ejectBtn.addEventListener('touchstart', e => {
+    e.preventDefault();
+    doEject(player1);
+});
+
+const touchState = { active: false, tx: 0, ty: 0 };
+
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    touchState.active = true;
+    touchState.tx = (touch.clientX - rect.left) * (canvas.width / rect.width) / zoomScale;
+    touchState.ty = (touch.clientY - rect.top) * (canvas.height / rect.height) / zoomScale;
+});
+
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    touchState.tx = (touch.clientX - rect.left) * (canvas.width / rect.width) / zoomScale;
+    touchState.ty = (touch.clientY - rect.top) * (canvas.height / rect.height) / zoomScale;
+});
+
+canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    touchState.active = false;
+});
+
+let haveGamepad = false;
+window.addEventListener("gamepadconnected", () => { haveGamepad = true; });
+window.addEventListener("gamepaddisconnected", () => { haveGamepad = false; });
+
+/* ========== JÁTÉKOS MOZGÁS ========== */
+function effectiveSpeed(entity) {
+    const sizeFactor = Math.max(1, entity.radius / 20);
+    return Math.min(MAX_PLAYER_SPEED, (entity.baseSpeed / Math.sqrt(sizeFactor)) * (entity.boost || 1));
+}
+
+function getInputDirection() {
+    let dx = 0, dy = 0;
+    
+    if(keys['w']) dy -= 1;
+    if(keys['s']) dy += 1;
+    if(keys['a']) dx -= 1;
+    if(keys['d']) dx += 1;
+    
+    if(touchState.active) {
+        const worldX = camX + touchState.tx;
+        const worldY = camY + touchState.ty;
+        dx = worldX - player1.x;
+        dy = worldY - player1.y;
+    }
+    
+    if(haveGamepad) {
+        const gamepad = navigator.getGamepads()[0];
+        if(gamepad) {
+            const ax = gamepad.axes[0] || 0;
+            const ay = gamepad.axes[1] || 0;
+            if(Math.abs(ax) > 0.12 || Math.abs(ay) > 0.12) {
+                dx = ax;
+                dy = ay;
+            }
+        }
+    }
+    
+    return { x: dx, y: dy };
+}
+
+/* ========== JÁTÉK MECHANIKÁK ========== */
+function doSplit(player) {
+    if(player.radius < SPLIT_MIN_RADIUS) return;
+    
+    const dir = getInputDirection();
+    const mag = Math.hypot(dir.x, dir.y) || 1;
+    player.splitting = {progress: 0, dirX: dir.x / mag, dirY: dir.y / mag};
+}
+
+function doEject(player) {
+    if(player.radius < EJECT_MIN_RADIUS) return;
+    
+    const amount = Math.max(EJECT_MIN_AMOUNT, Math.floor(player.radius * EJECT_AMOUNT_FACTOR));
+    player.radius = Math.max(MIN_PLAYER_RADIUS, player.radius - amount);
+    
+    const pellet = pelletPool.pop();
+    if(!pellet) return;
+    
+    pellet.radius = PELLET_RADIUS;
+    pellet.x = player.x + (player.radius + 8);
+    pellet.y = player.y;
+    
+    const dir = getInputDirection();
+    const mag = Math.hypot(dir.x, dir.y) || 1;
+    pellet.vx = (dir.x / mag) * PELLET_SPEED;
+    pellet.vy = (dir.y / mag) * PELLET_SPEED;
+    pellet.life = nowMs() + PELLET_LIFE_MS;
+    
+    pellets.push(pellet);
+    addToCell(pellet);
+}
+
+function handlePlayerDeath() {
+    switch(config.respawnMode) {
+        case 'yes':
+            resetPlayerTo(player1, worldWidth * 0.25, worldHeight * 0.5);
+            break;
+        case 'no':
+            gameOver();
+            break;
+        case 'limited':
+            if(player1.lives > 0) {
+                player1.lives--;
+                livesEl.textContent = player1.lives;
+                resetPlayerTo(player1, worldWidth * 0.25, worldHeight * 0.5);
+            } else {
+                gameOver();
+            }
+            break;
+    }
+}
+
+function gameOver() {
+    paused = true;
+    alert(`Játék vége! Végső pontszám: ${player1.score}`);
+}
+
+/* ========== NPC AI ========== */
+function updateNPCs(dt) {
+    const now = nowMs();
+    
+    for(const npc of npcs) {
+        if(isNaN(npc.x) || isNaN(npc.y)) {
+            const index = npcs.indexOf(npc);
+            npcs.splice(index, 1);
+            npcs.push(createNPC());
+            continue;
+        }
+
+        let moveX = 0, moveY = 0;
+        let moved = false;
+
+        const pdx = npc.x - player1.x;
+        const pdy = npc.y - player1.y;
+        const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+        
+        if(pdist < player1.radius + npc.radius + NPC_AVOID_DISTANCE && pdist > 0) {
+            const avoidSpeed = effectiveSpeed(npc) * (dt / 16.6667) * NPC_AVOID_SPEED_FACTOR;
+            moveX = (pdx / pdist) * avoidSpeed;
+            moveY = (pdy / pdist) * avoidSpeed;
+            moved = true;
+        }
+
+        if(!moved) {
+            const nearby = queryNearby(npc.x, npc.y, npc.radius + NPC_FOOD_SEARCH_RADIUS);
+            let closestFood = null;
+            let closestDist = Infinity;
+            
+            for(const obj of nearby) {
+                if(obj.type === 'food') {
+                    const d = dist2(npc.x, npc.y, obj.x, obj.y);
+                    if(d < closestDist) {
+                        closestDist = d;
+                        closestFood = obj;
+                    }
+                }
+            }
+            
+            if(closestFood) {
+                const fdx = closestFood.x - npc.x;
+                const fdy = closestFood.y - npc.y;
+                const fdist = Math.sqrt(fdx * fdx + fdy * fdy);
+                
+                if(fdist > 0) {
+                    const speed = effectiveSpeed(npc) * (dt / 16.6667) * NPC_FOOD_SPEED_FACTOR;
+                    moveX = (fdx / fdist) * speed;
+                    moveY = (fdy / fdist) * speed;
+                    moved = true;
+                }
+            }
+        }
+
+        if(!moved) {
+            if(now > npc.targetChangeTime || 
+               (Math.abs(npc.x - npc.targetX) < NPC_ARRIVAL_THRESHOLD && Math.abs(npc.y - npc.targetY) < NPC_ARRIVAL_THRESHOLD)) {
+                const maxTargetDist = NPC_MAX_TARGET_DIST;
+                const angle = Math.random() * Math.PI * 2;
+                npc.targetX = npc.x + Math.cos(angle) * maxTargetDist * (0.5 + Math.random() * 0.5);
+                npc.targetY = npc.y + Math.sin(angle) * maxTargetDist * (0.5 + Math.random() * 0.5);
+                npc.targetX = clamp(npc.targetX, npc.radius, worldWidth - npc.radius);
+                npc.targetY = clamp(npc.targetY, npc.radius, worldHeight - npc.radius);
+                npc.targetChangeTime = now + NPC_TARGET_CHANGE_MIN + Math.random() * NPC_TARGET_CHANGE_RANDOM;
+            }
+            
+            const dx = npc.targetX - npc.x;
+            const dy = npc.targetY - npc.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            if(dist > 0) {
+                const speed = effectiveSpeed(npc) * (dt / 16.6667) * NPC_RANDOM_SPEED_FACTOR;
+                moveX = (dx / dist) * speed;
+                moveY = (dy / dist) * speed;
+                moved = true;
+            }
+        }
+
+        if(!moved) {
+            const randomStep = NPC_MAX_STEP * NPC_RANDOM_STEP_FACTOR;
+            moveX = (Math.random() - 0.5) * randomStep;
+            moveY = (Math.random() - 0.5) * randomStep;
+        }
+
+        const totalDist = Math.sqrt(moveX * moveX + moveY * moveY);
+        if(totalDist > NPC_MAX_STEP) {
+            moveX = (moveX / totalDist) * NPC_MAX_STEP;
+            moveY = (moveY / totalDist) * NPC_MAX_STEP;
+        }
+
+        npc.vx += moveX / (dt / 16.6667);
+        npc.vy += moveY / (dt / 16.6667);
+
+        npc.x += npc.vx * (dt / 16.6667);
+        npc.y += npc.vy * (dt / 16.6667);
+        npc.x = clamp(npc.x, npc.radius, worldWidth - npc.radius);
+        npc.y = clamp(npc.y, npc.radius, worldHeight - npc.radius);
+
+        npc.vx *= FRICTION_FACTOR;
+        npc.vy *= FRICTION_FACTOR;
+
+        const idx = cellIndexFor(npc.x, npc.y);
+        if(idx !== npc._cell) {
+            removeFromCell(npc);
+            addToCell(npc);
+        }
+    }
+}
+
+/* ========== ENTITÁSOK FRISSÍTÉSE ========== */
+function updateEntities(dt) {
+    updateNPCs(dt);
+    
+    for(let i = pellets.length - 1; i >= 0; i--) {
+        const pellet = pellets[i];
+        if(!pellet) continue;
+        
+        pellet.x += pellet.vx * (dt / 16.6667);
+        pellet.y += pellet.vy * (dt / 16.6667);
+        
+        const idx = cellIndexFor(pellet.x, pellet.y);
+        if(idx !== pellet._cell) {
+            removeFromCell(pellet);
+            addToCell(pellet);
+        }
+        
+        if(nowMs() > pellet.life) {
+            removeFromCell(pellet);
+            pelletPool.push(pellet);
+            pellets.splice(i, 1);
+        }
+    }
+
+    for(let i = fragments.length - 1; i >= 0; i--) {
+        const fragment = fragments[i];
+        fragment.x += fragment.vx * (dt / 16.6667);
+        fragment.y += fragment.vy * (dt / 16.6667);
+        
+        fragment.vx *= FRAGMENT_DECEL_FACTOR;
+        fragment.vy *= FRAGMENT_DECEL_FACTOR;
+
+        fragment.vx *= FRICTION_FACTOR;
+        fragment.vy *= FRICTION_FACTOR;
+        
+        const idx = cellIndexFor(fragment.x, fragment.y);
+        if(idx !== fragment._cell) {
+            removeFromCell(fragment);
+            addToCell(fragment);
+        }
+        
+        if(nowMs() > fragment.life) fragment.merging = true;
+        
+        if(fragment.merging && fragment.owner) {
+            const d2 = dist2(fragment.x, fragment.y, fragment.owner.x, fragment.owner.y);
+            if(d2 < (fragment.radius + fragment.owner.radius + FRAG_MERGE_EXTRA) ** 2) {
+                fragment.merging = {progress: 0, targetX: fragment.owner.x, targetY: fragment.owner.y};
+            }
+        }
+        
+        if(fragment.merging && typeof fragment.merging === 'object') {
+            const prog = fragment.merging.progress += dt / 1000;
+            if(prog >= 1) {
+                fragment.owner.radius = Math.min(
+                    MAX_PLAYER_RADIUS, 
+                    Math.sqrt(fragment.owner.radius * fragment.owner.radius + fragment.radius * fragment.radius)
+                );
+                
+                removeFromCell(fragment);
+                fragmentPool.push(fragment);
+                fragments.splice(i, 1);
+                continue;
+            } else {
+                fragment.x += (fragment.merging.targetX - fragment.x) * 0.05;
+                fragment.y += (fragment.merging.targetY - fragment.y) * 0.05;
+            }
+        }
+        
+        if(fragment.x < -FRAG_OUT_BOUND || fragment.x > worldWidth + FRAG_OUT_BOUND || 
+           fragment.y < -FRAG_OUT_BOUND || fragment.y > worldHeight + FRAG_OUT_BOUND) {
+            removeFromCell(fragment);
+            fragmentPool.push(fragment);
+            fragments.splice(i, 1);
+        }
+    }
+
+    for(let i = powerups.length - 1; i >= 0; i--) {
+        const powerup = powerups[i];
+        if(nowMs() > powerup.life) {
+            removeFromCell(powerup);
+            powerupPool.push(powerup);
+            powerups.splice(i, 1);
+        }
+    }
+
+    updateOrganelles(player1);
+    npcs.forEach(updateOrganelles);
+    
+    if(player1.splitting) {
+        player1.splitting.progress += dt / 500;
+        if(player1.splitting.progress >= 1) {
+            const fragRadius = Math.max(FRAGMENT_MIN_RADIUS, Math.floor(player1.radius / 2));
+            player1.radius = Math.max(MIN_PLAYER_RADIUS, player1.radius - fragRadius);
+            
+            const fragment = fragmentPool.pop();
+            if(fragment) {
+                fragment.owner = player1;
+                fragment.radius = fragRadius;
+                fragment.x = player1.x + fragRadius + 2;
+                fragment.y = player1.y;
+                fragment.vx = player1.splitting.dirX * (FRAGMENT_SPEED_BASE + fragRadius / FRAGMENT_SPEED_FACTOR);
+                fragment.vy = player1.splitting.dirY * (FRAGMENT_SPEED_BASE + fragRadius / FRAGMENT_SPEED_FACTOR);
+                fragment.life = nowMs() + FRAGMENT_LIFE_MS;
+                fragment.merging = false;
+                fragments.push(fragment);
+                addToCell(fragment);
+            }
+            player1.splitting = null;
+        }
+    }
+}
+
+/* ========== ORGANELLUMOK FRISSÍTÉSE ========== */
+function updateOrganelles(entity) {
+    entity.organelles.forEach(org => {
+        org.x += org.vx;
+        org.y += org.vy;
+        const dist = Math.hypot(org.x, org.y);
+        if (dist > entity.radius * 0.9) {
+            const nx = org.x / dist, ny = org.y / dist;
+            org.x = nx * entity.radius * 0.9;
+            org.y = ny * entity.radius * 0.9;
+            org.vx = -org.vx; org.vy = -org.vy;
+        }
+    });
+}
+
+/* ========== ÜTKÖZÉSEK ÉS FELVÉTELEK ========== */
+function checkCollisions() {
+    handlePlayerPickup(player1);
+    
+    for(const npc of npcs) {
+        handleNPCPickup(npc);
+    }
+
+    for(const fragment of fragments) {
+        const nearby = queryNearby(fragment.x, fragment.y, fragment.radius + PICKUP_EXTRA_RADIUS);
+        
+        for(const obj of nearby) {
+            if(obj.type === 'food') {
+                const rsum = fragment.radius + obj.radius;
+                if(dist2(fragment.x, fragment.y, obj.x, obj.y) < rsum * rsum) {
+                    fragment.radius = Math.min(MAX_PLAYER_RADIUS, fragment.radius + FRAG_FOOD_GROW);
+                    moveToRandomFood(obj);
+                }
+            } 
+            else if(obj.type === 'pellet') {
+                const rsum = fragment.radius + obj.radius;
+                if(dist2(fragment.x, fragment.y, obj.x, obj.y) < rsum * rsum) {
+                    fragment.radius = Math.min(MAX_PLAYER_RADIUS, fragment.radius + FRAG_PELLET_GROW);
+                    removeFromCell(obj);
+                    const idx = pellets.indexOf(obj);
+                    if(idx >= 0) pellets.splice(idx, 1);
+                    pelletPool.push(obj);
+                }
+            } 
+            else if(obj.type === 'power') {
+                const rsum = fragment.radius + obj.radius;
+                if(dist2(fragment.x, fragment.y, obj.x, obj.y) < rsum * rsum) {
+                    fragment.radius = Math.min(MAX_PLAYER_RADIUS, fragment.radius + FRAG_POWER_GROW);
+                    removeFromCell(obj);
+                    powerupPool.push(obj);
+                    const pi = powerups.indexOf(obj);
+                    if(pi >= 0) powerups.splice(pi, 1);
+                }
+            }
+        }
+    }
+
+    for(let i = pellets.length - 1; i >= 0; i--) {
+        const pellet = pellets[i];
+        
+        const rsum1 = player1.radius + pellet.radius;
+        if(dist2(player1.x, player1.y, pellet.x, pellet.y) < rsum1 * rsum1) {
+            player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + pellet.radius * PELLET_PICKUP_GROW);
+            removeFromCell(pellet);
+            pelletPool.push(pellet);
+            pellets.splice(i, 1);
+            continue;
+        }
+        
+        for(const npc of npcs) {
+            const rsum = npc.radius + pellet.radius;
+            if(dist2(npc.x, npc.y, pellet.x, pellet.y) < rsum * rsum) {
+                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + pellet.radius * PELLET_PICKUP_GROW);
+                removeFromCell(pellet);
+                pelletPool.push(pellet);
+                pellets.splice(i, 1);
+                break;
+            }
+        }
+    }
+
+    const npcsToRemove = [];
+    const newNpcs = [];
+    
+    for(let i = npcs.length - 1; i >= 0; i--) {
+        const npc = npcs[i];
+        
+        const dx = player1.x - npc.x;
+        const dy = player1.y - npc.y;
+        const d2 = dx * dx + dy * dy;
+        const rsum = player1.radius + npc.radius;
+        
+        if(d2 > 0 && d2 < rsum * rsum) {
+            const dist = Math.sqrt(d2);
+            
+            if(dist > 0.001) {
+                if(player1.radius > npc.radius + EAT_SIZE_DIFF) {
+                    player1.radius = Math.min(MAX_PLAYER_RADIUS, player1.radius + Math.floor(npc.radius * CANNIBAL_GROW_FACTOR));
+                    player1.score += NPC_EAT_SCORE_GAIN;
+                    
+                    // Handle NPC death based on respawn mode
+                    if(config.npcRespawnMode === 'yes') {
+                        const newNpc = createNPC();
+                        newNpc._cell = -1;
+                        addToCell(newNpc);
+                        newNpcs.push(newNpc);
+                    } else if(config.npcRespawnMode === 'limited' && npc.lives > 1) {
+                        npc.lives--;
+                        npc.radius = NPC_RADIUS_MIN;
+                        npc.x = Math.random() * worldWidth;
+                        npc.y = Math.random() * worldHeight;
+                        continue; // Skip removal
+                    }
+                    npcsToRemove.push(i);
+                } 
+                else if(npc.radius > player1.radius + EAT_SIZE_DIFF) {
+                    npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(player1.radius * CANNIBAL_GROW_FACTOR));
+                    npc.score += NPC_EAT_SCORE_GAIN;
+                    handlePlayerDeath();
+                } 
+                else {
+                    const overlap = (rsum - dist);
+                    const nx = dx / dist, ny = dy / dist;
+                    player1.x += nx * overlap * 0.5;
+                    player1.y += ny * overlap * 0.5;
+                    npc.x -= nx * overlap * 0.5;
+                    npc.y -= ny * overlap * 0.5;
+                }
+            }
+        }
+        
+        for(let j = npcs.length - 1; j > i; j--) {
+            const other = npcs[j];
+            const dx = other.x - npc.x;
+            const dy = other.y - npc.y;
+            const d2 = dx * dx + dy * dy;
+            const rsum = npc.radius + other.radius;
+            
+            if(d2 > 0 && d2 < rsum * rsum) {
+                const dist = Math.sqrt(d2);
+                
+                if(dist > 0.001) {
+                    if(npc.radius > other.radius + EAT_SIZE_DIFF) {
+                        npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + Math.floor(other.radius * CANNIBAL_GROW_FACTOR));
+                        npc.score += NPC_NPC_EAT_SCORE_GAIN;
+                        
+                        // Handle other NPC death
+                        if(config.npcRespawnMode === 'yes') {
+                            const newNpc = createNPC();
+                            newNpc._cell = -1;
+                            addToCell(newNpc);
+                            newNpcs.push(newNpc);
+                        } else if(config.npcRespawnMode === 'limited' && other.lives > 1) {
+                            other.lives--;
+                            other.radius = NPC_RADIUS_MIN;
+                            other.x = Math.random() * worldWidth;
+                            other.y = Math.random() * worldHeight;
+                            continue; // Skip removal
+                        }
+                        npcsToRemove.push(j);
+                    } 
+                    else if(other.radius > npc.radius + EAT_SIZE_DIFF) {
+                        other.radius = Math.min(MAX_PLAYER_RADIUS, other.radius + Math.floor(npc.radius * CANNIBAL_GROW_FACTOR));
+                        other.score += NPC_NPC_EAT_SCORE_GAIN;
+                        
+                        // Handle current NPC death
+                        if(config.npcRespawnMode === 'yes') {
+                            const newNpc = createNPC();
+                            newNpc._cell = -1;
+                            addToCell(newNpc);
+                            newNpcs.push(newNpc);
+                        } else if(config.npcRespawnMode === 'limited' && npc.lives > 1) {
+                            npc.lives--;
+                            npc.radius = NPC_RADIUS_MIN;
+                            npc.x = Math.random() * worldWidth;
+                            npc.y = Math.random() * worldHeight;
+                            continue; // Skip removal
+                        }
+                        npcsToRemove.push(i);
+                        break;
+                    } 
+                    else {
+                        const overlap = (rsum - dist);
+                        const nx = dx / dist, ny = dy / dist;
+                        npc.x -= nx * overlap * 0.5;
+                        npc.y -= ny * overlap * 0.5;
+                        other.x += nx * overlap * 0.5;
+                        other.y += ny * overlap * 0.5;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Remove dead NPCs
+    for(const i of npcsToRemove.sort((a,b) => b-a)) {
+        removeFromCell(npcs[i]);
+        npcs.splice(i, 1);
+    }
+    
+    // Add new NPCs
+    npcs.push(...newNpcs);
+}
+
+function handlePlayerPickup(player) {
+    const nearby = queryNearby(player.x, player.y, player.radius + PICKUP_EXTRA_RADIUS);
+    
+    for(const obj of nearby) {
+        const rsum = player.radius + obj.radius;
+        if(dist2(player.x, player.y, obj.x, obj.y) >= rsum * rsum) continue;
+        
+        if(obj.type === 'food') {
+            const grow = Math.max(FOOD_GROW_MIN, FOOD_GROW_BASE * (20 / Math.max(20, player.radius)));
+            player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + grow);
+            player.score++;
+            moveToRandomFood(obj);
+        } 
+        else if(obj.type === 'power') {
+            applyPowerupToPlayer(player, obj);
+            removeFromCell(obj);
+            const idx = powerups.indexOf(obj);
+            if(idx >= 0) powerups.splice(idx, 1);
+            powerupPool.push(obj);
+        }
+    }
+}
+
+function handleNPCPickup(npc) {
+    const nearby = queryNearby(npc.x, npc.y, npc.radius + PICKUP_EXTRA_RADIUS);
+    
+    for(const obj of nearby) {
+        const rsum = npc.radius + obj.radius;
+        if(dist2(npc.x, npc.y, obj.x, obj.y) >= rsum * rsum) continue;
+        
+        if(obj.type === 'food') {
+            const grow = Math.max(FOOD_GROW_MIN, FOOD_GROW_BASE * (20 / Math.max(20, npc.radius)));
+            npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + grow);
+            npc.score++;
+            moveToRandomFood(obj);
+        } 
+        else if(obj.type === 'power') {
+            if(obj.kind === 'mass') {
+                npc.radius = Math.min(MAX_PLAYER_RADIUS, npc.radius + MASS_BOOST_AMOUNT);
+            } 
+            else if(obj.kind === 'speed') {
+                if(!npc.speedBoostActive) {
+                    npc.speedBoostActive = true;
+                    npc.baseSpeed *= NPC_SPEED_BOOST_FACTOR;
+                    setTimeout(() => {
+                        npc.baseSpeed /= NPC_SPEED_BOOST_FACTOR;
+                        npc.speedBoostActive = false;
+                    }, SPEED_BOOST_DURATION_MS);
+                }
+            } 
+            else if(obj.kind === 'shield') {
+                npc.shieldActive = true;
+                setTimeout(() => npc.shieldActive = false, NPC_SHIELD_DURATION_MS);
+            }
+            
+            removeFromCell(obj);
+            const idx = powerups.indexOf(obj);
+            if(idx >= 0) powerups.splice(idx, 1);
+            powerupPool.push(obj);
+        }
+    }
+}
+
+function applyPowerupToPlayer(player, powerObj) {
+    if(powerObj.kind === 'speed') {
+        player.boostUntil = nowMs() + SPEED_BOOST_DURATION_MS;
+        player.boost = SPEED_BOOST_FACTOR;
+    } 
+    else if(powerObj.kind === 'shield') {
+        player.flashUntil = nowMs() + SHIELD_DURATION_MS;
+    } 
+    else if(powerObj.kind === 'mass') {
+        player.radius = Math.min(MAX_PLAYER_RADIUS, player.radius + MASS_BOOST_AMOUNT);
+    }
+}
+
+function moveToRandomFood(foodObj) {
+    const r = FOOD_RADIUS;
+    const nx = r + Math.random() * (worldWidth - 2 * r);
+    const ny = r + Math.random() * (worldHeight - 2 * r);
+    moveToCell(foodObj, nx, ny);
+}
+
+/* ========== KAMERA ========== */
+let camX = 0, camY = 0;
+
+function updateCamera(dt) {
+    // Zoom kiszámítása a játékos sugara alapján
+    const targetZoom = Math.max(0.2, BASE_ZOOM - player1.radius * ZOOM_SCALE_FACTOR);
+    zoomScale += (targetZoom - zoomScale) * CAMERA_LERP;
+    
+    const targetX = player1.x - (canvas.width / 2) / zoomScale;
+    const targetY = player1.y - (canvas.height / 2) / zoomScale;
+    const maxCamX = Math.max(0, worldWidth - canvas.width / zoomScale);
+    const maxCamY = Math.max(0, worldHeight - canvas.height / zoomScale);
+    const cx = clamp(targetX, 0, maxCamX);
+    const cy = clamp(targetY, 0, maxCamY);
+    
+    camX += (cx - camX) * CAMERA_LERP;
+    camY += (cy - camY) * CAMERA_LERP;
+
+    // Canvas transzformáció frissítése
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    ctx.setTransform(dpr * zoomScale, 0, 0, dpr * zoomScale, 0, 0);
+}
+
+/* ========== SEJT KIRAJZOLÁS ========== */
+function drawCell(ctx, cx, cy, radius, color, organelles, vx = 0, vy = 0, splitting = null, merging = null) {
+    const speedMag = Math.hypot(vx, vy);
+    if (speedMag > 0) {
+        ctx.save();
+        const angle = Math.atan2(vy, vx);
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        ctx.scale(1 + speedMag * 0.01, 1 - speedMag * 0.005);
+        ctx.translate(-cx, -cy);
+    }
+
+    if (splitting) {
+        const prog = splitting.progress;
+        if (prog < 1) {
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(1 + prog * 0.5, 1 - prog * 0.2);
+            ctx.translate(-cx, -cy);
+        }
+    }
+
+    // Hullámzó membrán rajzolása
+    const time = performance.now() / 1000; // Animációhoz idő
+    const waveAmplitude = radius * 0.05; // Hullámzás erőssége (5% a sugárból)
+    const waveFrequency = 8; // Hullámok száma a körön
+    ctx.beginPath();
+    for (let i = 0; i <= 360; i += 5) { // Finom lépésekben rajzolunk
+        const angle = (i * Math.PI) / 180;
+        const wave = Math.sin(angle * waveFrequency + time) * waveAmplitude; // Szinusz hullám
+        const r = radius + wave;
+        const x = cx + Math.cos(angle) * r;
+        const y = cy + Math.sin(angle) * r;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; // Erősebb kontúr
+    ctx.lineWidth = 3 / zoomScale; // Vastagabb vonal
+    ctx.stroke();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'; // Árnyék a kontúrhoz
+    ctx.shadowBlur = 5 / zoomScale;
+    ctx.stroke(); // Dupla stroke az árnyékért
+    ctx.shadowBlur = 0;
+
+    // Citoplazma kitöltése (ugyanaz a hullámzó path-en)
+    const cytoGrad = ctx.createRadialGradient(cx - radius * 0.3, cy - radius * 0.3, 0, cx, cy, radius);
+    cytoGrad.addColorStop(0, 'rgba(100, 200, 255, 0.8)');
+    cytoGrad.addColorStop(0.5, 'rgba(50, 150, 255, 0.6)');
+    cytoGrad.addColorStop(1, 'rgba(0, 100, 200, 0.4)');
+    ctx.fillStyle = cytoGrad;
+    ctx.fill();
+
+    if (splitting && splitting.progress < 1) {
+        ctx.restore();
+    }
+
+    if (speedMag > 0) ctx.restore();
+
+    if (merging && typeof merging === 'object') {
+        const prog = merging.progress;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.quadraticCurveTo((cx + merging.targetX - camX)/2, (cy + merging.targetY - camY)/2, merging.targetX - camX, merging.targetY - camY);
+        ctx.strokeStyle = `rgba(100,200,255,${0.5 - prog})`;
+        ctx.stroke();
+    }
+}
+
+/* ========== MEGJELENÍTÉS ========== */
+function draw(remainingMs) {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width / zoomScale, canvas.height / zoomScale);
+    
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    const gridSize = GRID_LINE_SPACING;
+    const startX = Math.floor(camX / gridSize) * gridSize;
+    const endX = camX + canvas.width / zoomScale;
+    
+    for(let x = startX; x <= endX; x += gridSize) {
+        const sx = Math.round(x - camX);
+        ctx.beginPath(); 
+        ctx.moveTo(sx, 0); 
+        ctx.lineTo(sx, canvas.height / zoomScale); 
+        ctx.stroke();
+    }
+    
+    const startY = Math.floor(camY / gridSize) * gridSize;
+    const endY = camY + canvas.height / zoomScale;
+    
+    for(let y = startY; y <= endY; y += gridSize) {
+        const sy = Math.round(y - camY);
+        ctx.beginPath(); 
+        ctx.moveTo(0, sy); 
+        ctx.lineTo(canvas.width / zoomScale, sy); 
+        ctx.stroke();
+    }
+    
+    for(const food of foods) {
+        const sx = food.x - camX;
+        const sy = food.y - camY;
+        
+        if(sx + food.radius < 0 || sx - food.radius > canvas.width / zoomScale || 
+           sy + food.radius < 0 || sy - food.radius > canvas.height / zoomScale) continue;
+        
+        if(food.radius < 5) {
+            const intensity = Math.floor(FOOD_COLOR_INTENSITY_BASE + (food.radius/5)*FOOD_COLOR_INTENSITY_SCALE);
+            ctx.fillStyle = `rgb(255, ${intensity}, 0)`;
+        }
+        else if(food.radius < 15) {
+            const intensity = Math.floor(FOOD_COLOR_INTENSITY_REDUCE - ((food.radius-5)/10)*FOOD_COLOR_INTENSITY_REDUCE);
+            ctx.fillStyle = `rgb(255, ${intensity}, 0)`;
+        }
+        else {
+            const intensity = Math.floor(FOOD_COLOR_INTENSITY_REDUCE - Math.min(FOOD_COLOR_INTENSITY_MIN, (food.radius-15)/FOOD_COLOR_INTENSITY_DIV*10));
+            ctx.fillStyle = `rgb(${intensity}, 0, 0)`;
+        }
+        
+        ctx.beginPath();
+        ctx.arc(sx, sy, food.radius, 0, Math.PI*2);
+        ctx.fill();
+    }
+    
+    for(const powerup of powerups) {
+        const sx = powerup.x - camX;
+        const sy = powerup.y - camY;
+        
+        if(sx + powerup.radius < 0 || sx - powerup.radius > canvas.width / zoomScale || 
+           sy + powerup.radius < 0 || sy - powerup.radius > canvas.height / zoomScale) continue;
+        
+        ctx.beginPath();
+        if(powerup.kind === 'speed') ctx.fillStyle = '#3af';
+        else if(powerup.kind === 'shield') ctx.fillStyle = '#ffb';
+        else ctx.fillStyle = '#9f3';
+        
+        ctx.arc(sx, sy, powerup.radius, 0, Math.PI*2); 
+        ctx.fill();
+        ctx.fillStyle = 'black'; 
+        ctx.font = `${10 / zoomScale}px Arial`; 
+        ctx.fillText(powerup.kind[0].toUpperCase(), sx-4, sy+3);
+    }
+    
+    ctx.fillStyle = '#ccc';
+    for(const pellet of pellets) {
+        const sx = pellet.x - camX;
+        const sy = pellet.y - camY;
+        
+        if(sx + pellet.radius < 0 || sx - pellet.radius > canvas.width / zoomScale || 
+           sy + pellet.radius < 0 || sy - pellet.radius > canvas.height / zoomScale) continue;
+        
+        ctx.beginPath(); 
+        ctx.arc(sx, sy, pellet.radius, 0, Math.PI*2); 
+        ctx.fill();
+    }
+    
+    for(const fragment of fragments) {
+        const sx = fragment.x - camX;
+        const sy = fragment.y - camY;
+        
+        if(sx + fragment.radius < 0 || sx - fragment.radius > canvas.width / zoomScale || 
+           sy + fragment.radius < 0 || sy - fragment.radius > canvas.height / zoomScale) continue;
+        
+        drawCell(ctx, sx, sy, fragment.radius, 'blue', fragment.organelles || [], fragment.vx, fragment.vy, null, fragment.merging);
+    }
+    
+    for(const npc of npcs) {
+        const sx = npc.x - camX;
+        const sy = npc.y - camY;
+        
+        if(sx + npc.radius < 0 || sx - npc.radius > canvas.width / zoomScale || 
+           sy + npc.radius < 0 || sy - npc.radius > canvas.height / zoomScale) continue;
+        
+        drawCell(ctx, sx, sy, npc.radius, npc.color, npc.organelles, npc.vx, npc.vy, npc.splitting, npc.merging);
+        ctx.fillStyle = 'white'; 
+        ctx.font = `${10 / zoomScale}px Arial`; 
+        ctx.fillText('NPC', sx-10, sy+3);
+    }
+    
+    const now = nowMs();
+    const p1sx = player1.x - camX;
+    const p1sy = player1.y - camY;
+    
+    drawCell(ctx, p1sx, p1sy, player1.radius, player1.color, player1.organelles, player1.vx, player1.vy, player1.splitting, player1.merging);
+    ctx.fillStyle = 'white'; 
+    ctx.font = `${12 / zoomScale}px Arial`; 
+    ctx.fillText('J1', p1sx-8, p1sy+4);
+    
+    // HUD visszaállítás normál skálára
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = 'white'; 
+    ctx.font = '16px Arial';
+    ctx.fillText(`J1: ${player1.score} | Életek: ${player1.lives}`, 10, 22);
+    const remainingSec = Math.max(0, remainingMs/1000).toFixed(1);
+    ctx.fillText(`Idő: ${remainingSec}s`, canvas.width/2 - 40, 22);
+    ctx.restore();
+}
+
+/* ========== MINITÉRKÉP ========== */
+function drawMinimap() {
+    const mm = minimapEl;
+    const mmW = mm.clientWidth, mmH = mm.clientHeight;
+    const mmCtx = mm._ctx || (mm._ctx = document.createElement('canvas').getContext('2d'));
+    
+    if(!mm._canvas) {
+        mm._canvas = document.createElement('canvas');
+        mm._canvas.width = mmW;
+        mm._canvas.height = mmH;
+        mm._ctx = mm._canvas.getContext('2d');
+    }
+    
+    const c = mm._ctx;
+    mm._canvas.width = mmW;
+    mm._canvas.height = mmH;
+    
+    c.fillStyle = 'rgba(10,10,10,0.9)'; 
+    c.fillRect(0, 0, mmW, mmH);
+    
+    const sx = mmW / worldWidth;
+    const sy = mmH / worldHeight;
+    
+    c.fillStyle = 'gold';
+    const sample = MINIMAP_FOOD_SAMPLE;
+    
+    for(let i = 0; i < sample && i < foods.length; i++) {
+        const food = foods[i * Math.floor(Math.max(1, foods.length/sample))];
+        c.fillRect(food.x * sx, food.y * sy, 1, 1);
+    }
+    
+    for(const powerup of powerups) {
+        c.fillStyle = powerup.kind === 'speed' ? '#3af' : 
+                      powerup.kind === 'shield' ? '#ffb' : '#9f3';
+        c.fillRect(powerup.x * sx, powerup.y * sy, 3, 3);
+    }
+    
+    for(const npc of npcs) {
+        c.fillStyle = npc.color;
+        c.beginPath(); 
+        c.arc(npc.x * sx, npc.y * sy, Math.max(2, npc.radius*sx), 0, Math.PI*2); 
+        c.fill();
+    }
+    
+    c.fillStyle = 'blue'; 
+    c.beginPath(); 
+    c.arc(player1.x * sx, player1.y * sy, Math.max(2, player1.radius*sx), 0, Math.PI*2); 
+    c.fill();
+    
+    c.strokeStyle = 'rgba(255,255,255,0.5)'; 
+    c.strokeRect(camX*sx, camY*sy, (canvas.width / zoomScale)*sx, (canvas.height / zoomScale)*sy);
+    
+    mm.style.backgroundImage = `url(${mm._canvas.toDataURL()})`;
+}
+
+/* ========== EREDMÉNYTÁBLÁZAT ========== */
+function updateScoreboard() {
+    const items = [
+        {name: 'J1', score: player1.score, size: int(player1.radius)}
+    ];
+    
+    for(const npc of npcs) {
+        items.push({name: 'NPC', score: npc.score, size: int(npc.radius)});
+    }
+    
+    items.sort((a, b) => b.size - a.size);
+    sbEl.innerHTML = 'Top: —<br>' + items.map(it => `${it.name} — méret: ${it.size} / pont: ${it.score}`).join('<br>');
+    score1El.textContent = player1.score;
+}
+
+/* ========== JÁTÉK CIKLUS ========== */
+let lastTime = nowMs();
+let startTime = nowMs();
+
+function gameLoop(timestamp) {
+    if(paused) {
+        lastTime = timestamp;
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+    
+    const dt = timestamp - lastTime;
+    lastTime = timestamp;
+    
+    applyInputs(dt);
+    updateEntities(dt);
+    if(Math.random() < POWERUP_SPAWN_PROB) spawnSinglePowerup(['speed', 'shield', 'mass'][Math.floor(Math.random()*3)]);
+    checkCollisions();
+    updateCamera(dt);
+    
+    const elapsed = nowMs() - startTime;
+    const remainingMs = Math.max(0, GAME_DURATION_MS - elapsed);
+    draw(remainingMs);
+    drawMinimap();
+    updateScoreboard();
+    
+    if(remainingMs <= 0) {
+        paused = true;
+        setTimeout(() => alert(`Játék vége! J1: ${player1.score}`), 20);
+        return;
+    }
+    
+    requestAnimationFrame(gameLoop);
+}
+
+/* ========== BEMENET ALKALMAZÁSA ========== */
+function applyInputs(dt) {
+    const dir = getInputDirection();
+    const mag = Math.hypot(dir.x, dir.y);
+    
+    if(mag > 0) {
+        const speed = effectiveSpeed(player1);
+        player1.vx += (dir.x / mag) * speed;
+        player1.vy += (dir.y / mag) * speed;
+    }
+    
+    player1.x += player1.vx * (dt / 16.6667);
+    player1.y += player1.vy * (dt / 16.6667);
+    
+    player1.x = clamp(player1.x, player1.radius, worldWidth - player1.radius);
+    player1.y = clamp(player1.y, player1.radius, worldHeight - player1.radius);
+    
+    player1.vx *= FRICTION_FACTOR;
+    player1.vy *= FRICTION_FACTOR;
+    
+    const now = nowMs();
+    if(player1.boostUntil < now) {
+        player1.boost = 1;
+        player1.boostUntil = 0;
+    }
+    
+    if(keys['space']) { keys['space'] = false; doSplit(player1); }
+    if(keys['q']) { keys['q'] = false; doEject(player1); }
+    
+    if(haveGamepad) {
+        const gamepad = navigator.getGamepads()[0];
+        if(gamepad) {
+            if(gamepad.buttons[0] && gamepad.buttons[0].pressed) doSplit(player1);
+            if(gamepad.buttons[1] && gamepad.buttons[1].pressed) doEject(player1);
+        }
+    }
+}
+
+/* ========== JÁTÉK INICIALIZÁLÁSA ========== */
+function resetPlayerTo(player, x, y) {
+    player.x = x;
+    player.y = y;
+    player.radius = 20;
+    player.score = Math.max(0, player.score - DEATH_SCORE_LOSS);
+    player.vx = 0;
+    player.vy = 0;
+    player.organelles = [];
+    for(let i = 0; i < ORGANELLE_COUNT; i++) {
+        player.organelles.push({
+            x: (Math.random() - 0.5) * player.radius * 0.8,
+            y: (Math.random() - 0.5) * player.radius * 0.8,
+            vx: (Math.random() - 0.5) * 2,
+            vy: (Math.random() - 0.5) * 2
+        });
+    }
+}
+
+function startGame() {
+    initGrid();
+    
+    if(foodPool.length < foodCount) {
+        const needed = foodCount - foodPool.length;
+        for(let i = 0; i < needed; i++) {
+            foodPool.push({type: 'food', x: 0, y: 0, radius: FOOD_RADIUS, _cell: -1});
+        }
+    }
+    
+    spawnFoods(foodCount);
+    spawnPowerups();
+    
+    pellets.forEach(p => { if(p._cell >= 0) removeFromCell(p); pelletPool.push(p); });
+    pellets = [];
+    
+    fragments.forEach(f => { if(f._cell >= 0) removeFromCell(f); fragmentPool.push(f); });
+    fragments = [];
+    
+    powerups.forEach(p => { if(p._cell >= 0) removeFromCell(p); powerupPool.push(p); });
+    powerups = [];
+    
+    player1 = createPlayer(worldWidth * 0.25, worldHeight * 0.5, 'blue');
+    player1.score = 0;
+    player1.lives = config.respawnMode === 'limited' ? 3 : 1;
+    livesEl.textContent = player1.lives;
+    
+    initNPCs();
+    
+    startTime = nowMs();
+    paused = false;
+    lastTime = nowMs();
+    zoomScale = BASE_ZOOM;
+    
+    requestAnimationFrame(gameLoop);
+}
+
+initPools();
+startGame();
+
+window.addEventListener('keydown', e => {
+    if(e.key === 'p') paused = !paused;
+    
+    if(e.key === 'g') {
+        GRID_SIZE = Math.max(80, GRID_SIZE - DEBUG_GRID_STEP);
+        initGrid();
+        spawnFoods(foodCount);
+        for(const npc of npcs) {
+            npc._cell = -1;
+            addToCell(npc);
+        }
+    }
+    
+    if(e.key === 'h') {
+        GRID_SIZE += DEBUG_GRID_STEP;
+        initGrid();
+        spawnFoods(foodCount);
+        for(const npc of npcs) {
+            npc._cell = -1;
+            addToCell(npc);
+        }
+    }
+});
+
+// WebSocket kapcsolat
+const socket = new WebSocket(`wss://${window.location.hostname}`);
+
+// Alternatív módszer, ha a Render URL-t használod
+// const socket = new WebSocket('wss://your-render-app-name.onrender.com');
+
+socket.onopen = () => {
+  console.log('Connected to server');
+  document.getElementById('multiplayerStatus').textContent = 'Online';
+};
+
+socket.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  // Frissítsd a játékállapotot a kapott adatok alapján
+};
+
+socket.onclose = () => {
+  console.log('Disconnected from server');
+  document.getElementById('multiplayerStatus').textContent = 'Offline';
+};
+
+// Példa adat küldésére
+function sendMove(x, y) {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      type: 'move',
+      x,
+      y
+    }));
+  }
+}
+</script>
+</body>
+</html>
