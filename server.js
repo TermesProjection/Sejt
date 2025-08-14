@@ -5,11 +5,17 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Statikus fájlok kiszolgálása
+// Middleware a statikus fájlokhoz
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Kezdeti route a főoldalhoz
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// WebSocket szerver
 const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
 });
 
 const wss = new WebSocket.Server({ server });
@@ -105,3 +111,8 @@ function broadcastGameState() {
 
 // Kezdeti elemek generálása
 generateFood(200);
+
+// Hibakezelés 404-es hibákhoz
+app.use((req, res) => {
+  res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+});
