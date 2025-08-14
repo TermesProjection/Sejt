@@ -1,120 +1,107 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+const express = require('express');
+const WebSocket = require('ws');
+const path = require('path');
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+const PORT = process.env.PORT || 10000;
 
-const PORT = process.env.PORT || 3000;
+// Statikus fájlok kiszolgálása
+app.use(express.static(path.join(__dirname, 'public')));
 
-// statikus fájlok (public mappa)
-app.use(express.static("public"));
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
-// játék állapot
-let players = {};
-let foods = [];
-let powerUps = [];
-const foodCount = 20;
+const wss = new WebSocket.Server({ server });
 
-// random pozíció generálás
-function randomPos(max) {
-    return Math.floor(Math.random() * max);
-}
+// Játékállapot
+const gameState = {
+  players: {},
+  foods: [],
+  npcs: [],
+  powerups: []
+};
 
-// induláskor ételek
-function initFoods() {
-    foods = [];
-    for (let i = 0; i < foodCount; i++) {
-        foods.push({
-            id: `food-${i}-${Date.now()}`,
-            x: randomPos(800),
-            y: randomPos(600),
-            radius: 5
-        });
-    }
-}
-initFoods();
-
-// power-up típusok
-const powerUpTypes = ["speed", "shield", "slow"];
-
-// power-up spawn
-function spawnPowerUp() {
-    const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
-    powerUps.push({
-        id: `pu-${Date.now()}`,
-        x: randomPos(800),
-        y: randomPos(600),
-        radius: 8,
-        type
+// Kezdeti ételek generálása
+function generateFood(count) {
+  for (let i = 0; i < count; i++) {
+    gameState.foods.push({
+      x: Math.random() * 5000,
+      y: Math.random() * 5000,
+      radius: 5,
+      color: getRandomColor(),
+      id: Math.random().toString(36).substr(2, 9)
     });
+  }
 }
 
-// power-up időzített spawn
-setInterval(() => {
-    if (powerUps.length < 3) {
-        spawnPowerUp();
-    }
-}, 5000);
+function getRandomColor() {
+  return '#' + Math.floor(Math.random()*16777215).toString(16);
+}
 
-// socket.io események
-io.on("connection", (socket) => {
-    console.log(`Új játékos: ${socket.id}`);
-    players[socket.id] = {
-        id: socket.id,
-        x: randomPos(800),
-        y: randomPos(600),
-        radius: 20,
-        color: "#" + Math.floor(Math.random() * 16777215).toString(16),
-        speed: 5,
-        boost: 1,
-        shield: false,
-        slowUntil: 0,
-        score: 0
-    };
+wss.on('connection', (ws) => {
+  const playerId = Math.random().toString(36).substr(2, 9);
+  
+  gameState.players[playerId] = {
+    x: Math.random() * 5000,
+    y: Math.random() * 5000,
+    radius: 20,
+    color: getRandomColor(),
+    score: 0,
+    name: `Player_${Math.floor(Math.random() * 1000)}`
+  };
 
-    socket.emit("init", { id: socket.id, foods, powerUps, players });
+  // Kezdeti állapot küldése
+  ws.send(JSON.stringify({
+    type: 'init',
+    playerId,
+    ...gameState
+  }));
 
-    socket.on("move", (data) => {
-        if (players[socket.id]) {
-            players[socket.id].x = data.x;
-            players[socket.id].y = data.y;
-            players[socket.id].radius = data.radius;
-            players[socket.id].score = data.score;
-            players[socket.id].boost = data.boost;
-            players[socket.id].shield = data.shield;
+  // Üzenetek kezelése
+  ws.on('message', (message) => {
+    const data = JSON.parse(message);
+    const player = gameState.players[playerId];
+
+    switch(data.type) {
+      case 'move':
+        player.x = data.x;
+        player.y = data.y;
+        break;
+      case 'split':
+        if (player.radius > 30) {
+          player.radius /= 2;
         }
-    });
+        break;
+      case 'eject':
+        if (player.radius > 20) {
+          player.radius -= 2;
+        }
+        break;
+    }
 
-    socket.on("eatFood", (foodId) => {
-        foods = foods.filter(f => f.id !== foodId);
-        foods.push({
-            id: `food-${Date.now()}`,
-            x: randomPos(800),
-            y: randomPos(600),
-            radius: 5
-        });
-        io.emit("updateFoods", foods);
-    });
+    broadcastGameState();
+  });
 
-    socket.on("pickupPowerUp", (puId) => {
-        powerUps = powerUps.filter(p => p.id !== puId);
-        io.emit("updatePowerUps", powerUps);
-    });
-
-    socket.on("disconnect", () => {
-        console.log(`Játékos kilépett: ${socket.id}`);
-        delete players[socket.id];
-        io.emit("removePlayer", socket.id);
-    });
+  // Kapcsolat bontása
+  ws.on('close', () => {
+    delete gameState.players[playerId];
+    broadcastGameState();
+  });
 });
 
-// játékos állapot szinkronizálás 30 FPS-sel
-setInterval(() => {
-    io.emit("updatePlayers", players);
-}, 33);
+function broadcastGameState() {
+  const state = {
+    type: 'update',
+    ...gameState
+  };
 
-server.listen(PORT, () => {
-    console.log(`Szerver fut a ${PORT} porton`);
-});
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(state));
+    }
+  });
+}
+
+// Kezdeti elemek generálása
+generateFood(200);
